@@ -25,15 +25,17 @@ def _resolve_vault_path() -> Path:
 
 INBOX_DIR = Path(os.getenv("INBOX_DIR", "_inbox"))
 ARCHIVE_DIR = Path(os.getenv("ARCHIVE_DIR", "_archive"))
+FAILED_DIR = Path(os.getenv("FAILED_DIR", "_failed"))
 VAULT_PATH = _resolve_vault_path()
 
 
-def _move_to_archive(file_path: Path, archive_dir: Path) -> Path:
-    archive_dir.mkdir(parents=True, exist_ok=True)
-    dest = archive_dir / file_path.name
+def _move_to(file_path: Path, dest_dir: Path) -> Path:
+    """파일을 dest_dir 로 옮긴다. 같은 이름이 있으면 -1, -2 … 를 붙인다."""
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    dest = dest_dir / file_path.name
     counter = 1
     while dest.exists():
-        dest = archive_dir / f"{file_path.stem}-{counter}{file_path.suffix}"
+        dest = dest_dir / f"{file_path.stem}-{counter}{file_path.suffix}"
         counter += 1
     shutil.move(str(file_path), str(dest))
     return dest
@@ -43,22 +45,32 @@ def process_file(
     file_path: Path,
     vault_path: Path = VAULT_PATH,
     archive_dir: Path = ARCHIVE_DIR,
+    failed_dir: Path = FAILED_DIR,
 ) -> Path | None:
-    """파일 하나를 처리해 생성된 노트 경로를 반환한다. 실패 시 None."""
+    """파일 하나를 처리해 생성된 노트 경로를 반환한다. 실패 시 None.
+
+    추출 불가(빈 텍스트)·분류 실패한 파일은 _failed 로 격리해, 매 로그인마다
+    같은 파일을 무한 재시도(재OCR·재호출)하지 않도록 한다.
+    """
     logger.info("처리 시작: %s", file_path.name)
     try:
         text = extract_text(file_path)
         if not text.strip():
-            logger.warning("추출된 텍스트가 비어 있어 건너뜀: %s", file_path.name)
+            logger.warning("추출된 텍스트가 비어 격리: %s", file_path.name)
+            _move_to(file_path, failed_dir)
             return None
 
         result = classify(text)
         note_path = write_note(result, file_path.name, text, vault_path)
         logger.info("노트 저장: %s", note_path)
 
-        _move_to_archive(file_path, archive_dir)
+        _move_to(file_path, archive_dir)
         logger.info("아카이브 이동 완료: %s", file_path.name)
         return note_path
     except Exception:
-        logger.exception("처리 실패: %s", file_path.name)
+        logger.exception("처리 실패, 격리: %s", file_path.name)
+        try:
+            _move_to(file_path, failed_dir)
+        except Exception:
+            logger.exception("격리 이동 실패: %s", file_path.name)
         return None
