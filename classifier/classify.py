@@ -15,8 +15,9 @@ if _host.startswith(("0.0.0.0", "http://0.0.0.0", "https://0.0.0.0")):
     _host = _host.replace("0.0.0.0", "127.0.0.1")
 _client = ollama.Client(host=_host)
 
-# 추출 텍스트가 너무 길면 모델 컨텍스트를 넘기므로 앞부분만 사용한다.
-MAX_INPUT_CHARS = 8000
+# 추출 텍스트가 너무 길면 모델이 지시를 무시하고 엉뚱한 JSON 을 내므로 앞부분만 쓴다.
+# (긴 스캔 문서에서 지시문이 묻혀 스키마를 무시하는 현상을 줄이기 위해 짧게 자른다.)
+MAX_INPUT_CHARS = 4000
 
 # 모델이 JSON 을 끝없이 토해내 파싱이 실패하는 경우를 막기 위해 출력 토큰을 제한한다.
 MAX_OUTPUT_TOKENS = 1024
@@ -52,9 +53,18 @@ class Classification:
 
 def _build_messages(text: str) -> list[dict]:
     content = text[:MAX_INPUT_CHARS]
+    # 문서를 구분자로 감싸고, 원하는 키 스키마를 본문 "뒤"에 다시 명시한다.
+    # 모델은 가장 최근 지시를 더 잘 따르므로, 긴 문서에서도 스키마를 지키게 된다.
+    user = (
+        "다음 문서를 분류·요약하세요.\n\n"
+        f"=== 문서 시작 ===\n{content}\n=== 문서 끝 ===\n\n"
+        "반드시 아래 키만 가진 JSON 하나만 출력하세요: "
+        '{"domain": "개인 또는 업무", "category": "...", "title": "...", "summary": "..."}. '
+        'domain 은 반드시 "개인" 또는 "업무" 중 하나여야 합니다.'
+    )
     return [
         {"role": "system", "content": SYSTEM_PROMPT},
-        {"role": "user", "content": f"다음 문서를 분류하고 요약하세요:\n\n{content}"},
+        {"role": "user", "content": user},
     ]
 
 
