@@ -29,6 +29,34 @@ FAILED_DIR = Path(os.getenv("FAILED_DIR", "_failed"))
 VAULT_PATH = _resolve_vault_path()
 
 
+# 폴더가 비었는지 판단할 때 무시할 OS 잔재 파일(맥·윈도우 iCloud 동기화 잔여물).
+_JUNK_FILES = {".DS_Store", "Thumbs.db", "desktop.ini"}
+
+
+def prune_empty_dirs(root: Path) -> None:
+    """root 하위의 빈(또는 잔재 파일만 남은) 폴더를 제거한다. root 자체는 보존한다."""
+    if not root.exists():
+        return
+    # 깊은 폴더부터 처리해야 부모가 비는 것을 연쇄적으로 정리할 수 있다.
+    subdirs = sorted(
+        (p for p in root.rglob("*") if p.is_dir()),
+        key=lambda p: len(p.parts),
+        reverse=True,
+    )
+    for dirpath in subdirs:
+        entries = list(dirpath.iterdir())
+        if all(e.is_file() and e.name in _JUNK_FILES for e in entries):
+            for junk in entries:
+                try:
+                    junk.unlink()
+                except OSError:
+                    pass
+            try:
+                dirpath.rmdir()
+            except OSError:
+                logger.debug("빈 폴더 제거 실패(건너뜀): %s", dirpath)
+
+
 def _move_to(file_path: Path, dest_dir: Path) -> Path:
     """파일을 dest_dir 로 옮긴다. 같은 이름이 있으면 -1, -2 … 를 붙인다."""
     dest_dir.mkdir(parents=True, exist_ok=True)

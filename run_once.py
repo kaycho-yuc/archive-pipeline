@@ -3,7 +3,13 @@
 import logging
 
 from extractors.extract import IMAGE_EXTENSIONS, PDF_EXTENSIONS, TEXT_EXTENSIONS
-from pipeline import ARCHIVE_DIR, INBOX_DIR, VAULT_PATH, process_file
+from pipeline import (
+    ARCHIVE_DIR,
+    INBOX_DIR,
+    VAULT_PATH,
+    process_file,
+    prune_empty_dirs,
+)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -31,6 +37,7 @@ def main():
     for path in files:
         if process_file(path, vault_path=VAULT_PATH, archive_dir=ARCHIVE_DIR):
             processed += 1
+    prune_empty_dirs(INBOX_DIR)
     logger.info("완료: %d/%d 성공", processed, len(files))
 
 

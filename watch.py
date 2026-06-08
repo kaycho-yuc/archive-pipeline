@@ -8,7 +8,13 @@ from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
 
 from extractors.extract import IMAGE_EXTENSIONS, PDF_EXTENSIONS, TEXT_EXTENSIONS
-from pipeline import ARCHIVE_DIR, INBOX_DIR, VAULT_PATH, process_file
+from pipeline import (
+    ARCHIVE_DIR,
+    INBOX_DIR,
+    VAULT_PATH,
+    process_file,
+    prune_empty_dirs,
+)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -48,6 +54,7 @@ class InboxHandler(FileSystemEventHandler):
         if not _wait_until_stable(path):
             return
         process_file(path, vault_path=VAULT_PATH, archive_dir=ARCHIVE_DIR)
+        prune_empty_dirs(INBOX_DIR)
 
 
 def main():

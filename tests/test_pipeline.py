@@ -24,6 +24,24 @@ def test_process_file_end_to_end(tmp_path, monkeypatch):
     assert (archive / "memo.txt").exists()  # _archive 로 이동
 
 
+def test_prune_empty_dirs_removes_empty_and_junk(tmp_path):
+    root = tmp_path / "inbox"
+    (root / "empty").mkdir(parents=True)
+    (root / "junk_only").mkdir()
+    (root / "junk_only" / ".DS_Store").write_text("x", encoding="utf-8")
+    (root / "keep").mkdir()
+    (root / "keep" / "real.txt").write_text("내용", encoding="utf-8")
+    (root / "nested" / "deep").mkdir(parents=True)  # 둘 다 비어 연쇄 제거 대상
+
+    pipeline.prune_empty_dirs(root)
+
+    assert not (root / "empty").exists()
+    assert not (root / "junk_only").exists()  # 잔재 파일만 있던 폴더도 제거
+    assert not (root / "nested").exists()  # 빈 부모까지 연쇄 제거
+    assert (root / "keep" / "real.txt").exists()  # 실제 파일 있는 폴더는 보존
+    assert root.exists()  # root 자체는 보존
+
+
 def test_process_file_quarantines_empty(tmp_path):
     inbox = tmp_path / "inbox"
     inbox.mkdir()
