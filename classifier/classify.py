@@ -8,6 +8,13 @@ import ollama
 
 DEFAULT_MODEL = os.getenv("OLLAMA_MODEL", "llama3.1")
 
+# 이 PC의 시스템 OLLAMA_HOST 가 0.0.0.0 (접속 불가 주소)로 설정돼 있어
+# 파이프라인 전용 접속 주소를 명시한다. 시스템 환경변수는 건드리지 않는다.
+_host = os.getenv("OLLAMA_HOST", "127.0.0.1:11434")
+if _host.startswith(("0.0.0.0", "http://0.0.0.0", "https://0.0.0.0")):
+    _host = _host.replace("0.0.0.0", "127.0.0.1")
+_client = ollama.Client(host=_host)
+
 # 추출 텍스트가 너무 길면 모델 컨텍스트를 넘기므로 앞부분만 사용한다.
 MAX_INPUT_CHARS = 8000
 
@@ -45,7 +52,7 @@ def _build_messages(text: str) -> list[dict]:
 
 
 def _call_ollama(messages: list[dict], model: str) -> str:
-    response = ollama.chat(
+    response = _client.chat(
         model=model,
         messages=messages,
         format="json",
