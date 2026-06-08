@@ -55,7 +55,7 @@ def main():
     logger.info("감시 시작: %s", INBOX_DIR.resolve())
 
     observer = Observer()
-    observer.schedule(InboxHandler(), str(INBOX_DIR), recursive=False)
+    observer.schedule(InboxHandler(), str(INBOX_DIR), recursive=True)
     observer.start()
     try:
         while True:

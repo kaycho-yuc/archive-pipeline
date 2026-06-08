@@ -18,7 +18,7 @@ def main():
     INBOX_DIR.mkdir(parents=True, exist_ok=True)
     files = [
         p
-        for p in sorted(INBOX_DIR.iterdir())
+        for p in sorted(INBOX_DIR.rglob("*"))
         if p.is_file() and p.suffix.lower() in SUPPORTED_EXTENSIONS
     ]
 
