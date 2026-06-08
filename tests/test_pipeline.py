@@ -9,6 +9,7 @@ from classifier.classify import Classification
 def _isolate_side_effects(tmp_path, monkeypatch):
     """테스트가 실제 로그 파일을 쓰거나 텔레그램을 호출하지 않도록 격리한다."""
     monkeypatch.setattr(pipeline, "PROCESSING_LOG", tmp_path / "log.csv")
+    monkeypatch.setattr(pipeline, "HASH_LOG", tmp_path / "hashes.json")
     monkeypatch.setattr(notifier, "notify", lambda message: False)
 
 

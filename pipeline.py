@@ -1,6 +1,8 @@
 """추출 → 분류 → 노트 저장 → 아카이브 이동까지 단일 파일 처리 파이프라인."""
 
 import csv
+import hashlib
+import json
 import logging
 import os
 import shutil
@@ -30,7 +32,43 @@ INBOX_DIR = Path(os.getenv("INBOX_DIR", "_inbox"))
 ARCHIVE_DIR = Path(os.getenv("ARCHIVE_DIR", "_archive"))
 FAILED_DIR = Path(os.getenv("FAILED_DIR", "_failed"))
 PROCESSING_LOG = Path(os.getenv("PROCESSING_LOG", "processing_log.csv"))
+HASH_LOG = Path(os.getenv("HASH_LOG", "processed_hashes.json"))
 VAULT_PATH = _resolve_vault_path()
+
+
+def _file_hash(file_path: Path) -> str:
+    """파일 내용의 SHA-256 해시(중복 처리 방지용)."""
+    digest = hashlib.sha256()
+    with file_path.open("rb") as fh:
+        for chunk in iter(lambda: fh.read(65536), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _load_hashes() -> dict:
+    if not HASH_LOG.exists():
+        return {}
+    try:
+        return json.loads(HASH_LOG.read_text(encoding="utf-8"))
+    except Exception:
+        logger.exception("해시 로그 읽기 실패, 빈 로그로 시작: %s", HASH_LOG)
+        return {}
+
+
+def _record_hash(file_hash: str, filename: str, note_path: str) -> None:
+    hashes = _load_hashes()
+    hashes[file_hash] = {
+        "filename": filename,
+        "note": note_path,
+        "at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+    }
+    try:
+        HASH_LOG.parent.mkdir(parents=True, exist_ok=True)
+        HASH_LOG.write_text(
+            json.dumps(hashes, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+    except Exception:
+        logger.exception("해시 로그 기록 실패: %s", filename)
 
 
 def _log_result(filename: str, status: str, detail: str = "") -> None:
@@ -103,6 +141,13 @@ def process_file(
     name = file_path.name
     logger.info("처리 시작: %s", name)
     try:
+        file_hash = _file_hash(file_path)
+        if file_hash in _load_hashes():
+            logger.info("이미 처리된 파일(중복), 아카이브로 이동: %s", name)
+            _move_to(file_path, archive_dir)
+            _log_result(name, "중복", "해시 일치 — 건너뜀")
+            return None
+
         text = extract_text(file_path)
         if not text.strip():
             logger.warning("추출된 텍스트가 비어 격리: %s", name)
@@ -115,6 +160,7 @@ def process_file(
         note_path = write_note(result, name, text, vault_path)
         logger.info("노트 저장: %s", note_path)
 
+        _record_hash(file_hash, name, str(note_path))
         _move_to(file_path, archive_dir)
         logger.info("아카이브 이동 완료: %s", name)
         _log_result(name, "저장", str(note_path))

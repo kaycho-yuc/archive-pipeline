@@ -2,7 +2,8 @@
 
 import json
 import os
-from dataclasses import dataclass
+import re
+from dataclasses import dataclass, field
 
 import ollama
 
@@ -33,13 +34,15 @@ SYSTEM_PROMPT = """\
 {
   "domain": "개인 또는 업무 중 하나",
   "category": "문서 내용에 맞는 구체적인 세부 카테고리 (한국어 단어 또는 짧은 구)",
+  "tags": ["핵심 키워드 3~6개"],
   "title": "문서를 대표하는 짧은 제목",
   "summary": "문서 핵심 내용을 3~5문장으로 요약"
 }
 
 규칙:
 - domain은 반드시 "개인" 또는 "업무" 중 하나여야 합니다.
-- category는 폴더 이름으로 쓸 수 있도록 간결해야 합니다 (예: "계약서", "회의록", "영수증").
+- category는 가장 대표적인 분류 하나입니다 (예: "계약서", "회의록", "영수증").
+- tags는 검색에 쓸 핵심 키워드 3~6개의 배열입니다 (각 태그는 공백 없는 짧은 단어).
 - 반드시 유효한 JSON 한 개만 출력하세요."""
 
 
@@ -49,6 +52,7 @@ class Classification:
     category: str
     title: str
     summary: str
+    tags: list[str] = field(default_factory=list)
 
 
 def _build_messages(text: str) -> list[dict]:
@@ -78,6 +82,20 @@ def _call_ollama(messages: list[dict], model: str, temperature: float = 0.0) -> 
     return response["message"]["content"]
 
 
+def _normalize_tags(raw_tags) -> list[str]:
+    """tags 를 공백 없는 문자열 리스트로 정규화한다(배열·쉼표문자열 모두 허용)."""
+    if isinstance(raw_tags, str):
+        raw_tags = re.split(r"[,\n]", raw_tags)
+    if not isinstance(raw_tags, list):
+        return []
+    tags = []
+    for tag in raw_tags:
+        text = re.sub(r"\s+", "-", str(tag).strip()).strip("-#")
+        if text and text not in tags:
+            tags.append(text)
+    return tags
+
+
 def _parse_response(raw: str) -> Classification:
     data = json.loads(raw)
     if not isinstance(data, dict):
@@ -94,6 +112,7 @@ def _parse_response(raw: str) -> Classification:
         category=str(data.get("category") or "미분류").strip() or "미분류",
         title=str(data.get("title") or "제목 없음").strip() or "제목 없음",
         summary=str(data.get("summary") or "").strip(),
+        tags=_normalize_tags(data.get("tags")),
     )
 
 

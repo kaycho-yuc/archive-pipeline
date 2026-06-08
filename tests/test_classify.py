@@ -14,6 +14,7 @@ def test_classify_parses_valid_response(monkeypatch):
     payload = {
         "domain": "업무",
         "category": "회의록",
+        "tags": ["주간회의", "진행상황"],
         "title": "주간 회의 정리",
         "summary": "이번 주 진행 상황을 정리한 회의록입니다.",
     }
@@ -26,7 +27,17 @@ def test_classify_parses_valid_response(monkeypatch):
         category="회의록",
         title="주간 회의 정리",
         summary="이번 주 진행 상황을 정리한 회의록입니다.",
+        tags=["주간회의", "진행상황"],
     )
+
+
+def test_classify_normalizes_tags_with_spaces(monkeypatch):
+    payload = {"domain": "업무", "tags": ["성수동 현장", "성수동 현장", "공정표"]}
+    monkeypatch.setattr(classify_module, "_call_ollama", _fake_response(payload))
+
+    result = classify("내용")
+
+    assert result.tags == ["성수동-현장", "공정표"]  # 공백→-, 중복 제거
 
 
 def test_classify_rejects_invalid_domain(monkeypatch):
@@ -53,6 +64,7 @@ def test_classify_defaults_missing_optional_fields(monkeypatch):
     assert result.category == "미분류"
     assert result.title == "제목 없음"
     assert result.summary == ""
+    assert result.tags == []
 
 
 def test_classify_retries_then_succeeds(monkeypatch):

@@ -1,3 +1,5 @@
+from datetime import datetime
+
 from classifier.classify import Classification
 from notes.write_note import write_note
 
@@ -6,19 +8,30 @@ RESULT = Classification(
     category="회의록",
     title="주간 회의 정리",
     summary="이번 주 진행 상황 요약.",
+    tags=["성수동", "공정"],
 )
 
+_Q = f"{datetime.now().year}-Q{(datetime.now().month - 1) // 3 + 1}"
 
-def test_write_note_creates_file_in_domain_category(tmp_path):
+
+def test_write_note_uses_domain_and_quarter_folder(tmp_path):
     path = write_note(RESULT, "meeting.pdf", "원문 내용입니다.", tmp_path)
 
-    assert path == tmp_path / "업무" / "회의록" / "주간 회의 정리.md"
+    assert path == tmp_path / "10_Professional" / _Q / "주간 회의 정리.md"
     text = path.read_text(encoding="utf-8")
     assert "title: 주간 회의 정리" in text
     assert "domain: 업무" in text
     assert "source: meeting.pdf" in text
+    # category 가 첫 태그, 모델 태그가 뒤따른다.
+    assert "tags:\n  - 회의록\n  - 성수동\n  - 공정" in text
     assert "이번 주 진행 상황 요약." in text
     assert "원문 내용입니다." in text
+
+
+def test_write_note_personal_goes_to_20(tmp_path):
+    result = Classification(domain="개인", category="메모", title="생각", summary="s")
+    path = write_note(result, "x.txt", "c", tmp_path)
+    assert path == tmp_path / "20_Personal" / _Q / "생각.md"
 
 
 def test_write_note_avoids_collision(tmp_path):
@@ -35,5 +48,5 @@ def test_write_note_sanitizes_invalid_chars(tmp_path):
     )
     path = write_note(result, "x.txt", "c", tmp_path)
 
-    assert path.parent.name == "영수증카드"
+    assert path.parent.name == _Q
     assert path.name == "3월 정산.md"

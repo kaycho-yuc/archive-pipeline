@@ -11,3 +11,5 @@ _archive/*
 !_archive/.gitkeep
 _failed/
 processing_log.csv
+processed_hashes.json
+vault_backup_*.zip
