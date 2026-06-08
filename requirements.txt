@@ -1,0 +1,6 @@
+pdfplumber
+pytesseract
+watchdog
+ollama
+python-dotenv
+Pillow
