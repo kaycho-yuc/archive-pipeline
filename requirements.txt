@@ -4,3 +4,4 @@ watchdog
 ollama
 python-dotenv
 Pillow
+pymupdf
