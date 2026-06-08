@@ -9,3 +9,4 @@ _inbox/*
 !_inbox/.gitkeep
 _archive/*
 !_archive/.gitkeep
+_failed/
