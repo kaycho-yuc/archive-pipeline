@@ -10,3 +10,4 @@ _inbox/*
 _archive/*
 !_archive/.gitkeep
 _failed/
+processing_log.csv

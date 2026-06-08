@@ -1,12 +1,15 @@
 """추출 → 분류 → 노트 저장 → 아카이브 이동까지 단일 파일 처리 파이프라인."""
 
+import csv
 import logging
 import os
 import shutil
+from datetime import datetime
 from pathlib import Path
 
 from dotenv import load_dotenv
 
+import notifier
 from classifier.classify import classify
 from extractors.extract import extract_text
 from notes.write_note import write_note
@@ -26,7 +29,24 @@ def _resolve_vault_path() -> Path:
 INBOX_DIR = Path(os.getenv("INBOX_DIR", "_inbox"))
 ARCHIVE_DIR = Path(os.getenv("ARCHIVE_DIR", "_archive"))
 FAILED_DIR = Path(os.getenv("FAILED_DIR", "_failed"))
+PROCESSING_LOG = Path(os.getenv("PROCESSING_LOG", "processing_log.csv"))
 VAULT_PATH = _resolve_vault_path()
+
+
+def _log_result(filename: str, status: str, detail: str = "") -> None:
+    """처리 결과를 CSV 로그에 한 줄 추가한다(엑셀에서 한글이 깨지지 않게 utf-8-sig)."""
+    try:
+        new_file = not PROCESSING_LOG.exists()
+        PROCESSING_LOG.parent.mkdir(parents=True, exist_ok=True)
+        with PROCESSING_LOG.open("a", encoding="utf-8-sig", newline="") as fh:
+            writer = csv.writer(fh)
+            if new_file:
+                writer.writerow(["시각", "상태", "파일명", "상세"])
+            writer.writerow(
+                [datetime.now().strftime("%Y-%m-%d %H:%M:%S"), status, filename, detail]
+            )
+    except Exception:
+        logger.exception("처리 로그 기록 실패: %s", filename)
 
 
 # 폴더가 비었는지 판단할 때 무시할 OS 잔재 파일(맥·윈도우 iCloud 동기화 잔여물).
@@ -80,25 +100,31 @@ def process_file(
     추출 불가(빈 텍스트)·분류 실패한 파일은 _failed 로 격리해, 매 로그인마다
     같은 파일을 무한 재시도(재OCR·재호출)하지 않도록 한다.
     """
-    logger.info("처리 시작: %s", file_path.name)
+    name = file_path.name
+    logger.info("처리 시작: %s", name)
     try:
         text = extract_text(file_path)
         if not text.strip():
-            logger.warning("추출된 텍스트가 비어 격리: %s", file_path.name)
+            logger.warning("추출된 텍스트가 비어 격리: %s", name)
             _move_to(file_path, failed_dir)
+            _log_result(name, "격리(빈 텍스트)", "추출된 텍스트 없음")
+            notifier.notify(f"⚠️ 처리 실패(텍스트 없음): {name}\n→ _failed 로 격리됨")
             return None
 
         result = classify(text)
-        note_path = write_note(result, file_path.name, text, vault_path)
+        note_path = write_note(result, name, text, vault_path)
         logger.info("노트 저장: %s", note_path)
 
         _move_to(file_path, archive_dir)
-        logger.info("아카이브 이동 완료: %s", file_path.name)
+        logger.info("아카이브 이동 완료: %s", name)
+        _log_result(name, "저장", str(note_path))
         return note_path
-    except Exception:
-        logger.exception("처리 실패, 격리: %s", file_path.name)
+    except Exception as error:
+        logger.exception("처리 실패, 격리: %s", name)
         try:
             _move_to(file_path, failed_dir)
         except Exception:
-            logger.exception("격리 이동 실패: %s", file_path.name)
+            logger.exception("격리 이동 실패: %s", name)
+        _log_result(name, "실패", str(error))
+        notifier.notify(f"⚠️ 처리 실패: {name}\n사유: {error}\n→ _failed 로 격리됨")
         return None
