@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import shutil
+import threading
 from datetime import datetime
 from pathlib import Path
 
@@ -34,6 +35,57 @@ FAILED_DIR = Path(os.getenv("FAILED_DIR", "_failed"))
 PROCESSING_LOG = Path(os.getenv("PROCESSING_LOG", "processing_log.csv"))
 HASH_LOG = Path(os.getenv("HASH_LOG", "processed_hashes.json"))
 VAULT_PATH = _resolve_vault_path()
+
+
+# iCloud(및 OneDrive) "온라인 전용" 파일을 가리키는 Windows 파일 속성 비트.
+# 이 비트가 있으면 파일 바이트가 아직 로컬에 없어, 읽으면 다운로드될 때까지 멈춘다.
+_FILE_ATTRIBUTE_OFFLINE = 0x00001000
+_FILE_ATTRIBUTE_RECALL_ON_OPEN = 0x00040000
+_FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS = 0x00400000
+_DEHYDRATED_BITS = (
+    _FILE_ATTRIBUTE_OFFLINE
+    | _FILE_ATTRIBUTE_RECALL_ON_OPEN
+    | _FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS
+)
+
+# 온라인 전용 파일을 내려받기까지 기다릴 최대 시간(초). 못 받으면 이번엔 건너뛴다.
+HYDRATE_TIMEOUT = float(os.getenv("HYDRATE_TIMEOUT", "30"))
+
+
+def _is_dehydrated(file_path: Path) -> bool:
+    """파일이 아직 다운로드되지 않은 iCloud '온라인 전용' placeholder인지 판단한다."""
+    try:
+        attrs = file_path.stat().st_file_attributes  # Windows 전용
+    except (AttributeError, OSError):
+        return False  # 비윈도우거나 속성을 못 읽으면 일반 파일로 취급
+    return bool(attrs & _DEHYDRATED_BITS)
+
+
+def _ensure_hydrated(file_path: Path, timeout: float = HYDRATE_TIMEOUT) -> bool:
+    """온라인 전용 파일을 백그라운드 스레드로 내려받게 하고, timeout 안에 준비되면 True.
+
+    파이프라인이 다운로드 I/O에서 무한정 멈추지 않도록, 첫 바이트 접근(다운로드
+    트리거)을 별도 스레드에서 수행하고 메인은 timeout 까지만 기다린다. 시간 안에
+    못 받으면 False — 이번 처리에선 건너뛰고(파일은 _inbox 에 그대로) 다음 스윕에서
+    재시도한다. 백그라운드 다운로드는 계속 진행되므로 다음 번엔 보통 성공한다.
+    """
+    if not _is_dehydrated(file_path):
+        return True
+
+    logger.info("iCloud에서 내려받는 중(최대 %.0fs): %s", timeout, file_path.name)
+    done = threading.Event()
+
+    def _pull() -> None:
+        try:
+            with file_path.open("rb") as fh:
+                fh.read(1)  # 첫 바이트 접근이 iCloud 다운로드를 트리거한다
+        except Exception:
+            pass
+        finally:
+            done.set()
+
+    threading.Thread(target=_pull, daemon=True).start()
+    return done.wait(timeout) and not _is_dehydrated(file_path)
 
 
 def _file_hash(file_path: Path) -> str:
@@ -141,6 +193,11 @@ def process_file(
     name = file_path.name
     logger.info("처리 시작: %s", name)
     try:
+        if not _ensure_hydrated(file_path):
+            logger.warning("iCloud 다운로드 대기 시간 초과, 이번엔 건너뜀: %s", name)
+            _log_result(name, "보류(미다운로드)", "iCloud 온라인 전용 — 다음 스윕에서 재시도")
+            return None
+
         file_hash = _file_hash(file_path)
         if file_hash in _load_hashes():
             logger.info("이미 처리된 파일(중복), 아카이브로 이동: %s", name)
