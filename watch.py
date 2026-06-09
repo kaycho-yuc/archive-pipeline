@@ -7,7 +7,13 @@ from pathlib import Path
 from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
 
-from extractors.extract import IMAGE_EXTENSIONS, PDF_EXTENSIONS, TEXT_EXTENSIONS
+from extractors.extract import (
+    HWP_EXTENSIONS,
+    HWPX_EXTENSIONS,
+    IMAGE_EXTENSIONS,
+    PDF_EXTENSIONS,
+    TEXT_EXTENSIONS,
+)
 from pipeline import (
     ARCHIVE_DIR,
     INBOX_DIR,
@@ -22,7 +28,13 @@ logging.basicConfig(
 )
 logger = logging.getLogger("archive_pipeline")
 
-SUPPORTED_EXTENSIONS = PDF_EXTENSIONS | IMAGE_EXTENSIONS | TEXT_EXTENSIONS
+SUPPORTED_EXTENSIONS = (
+    PDF_EXTENSIONS
+    | IMAGE_EXTENSIONS
+    | TEXT_EXTENSIONS
+    | HWP_EXTENSIONS
+    | HWPX_EXTENSIONS
+)
 
 # 파일이 완전히 복사될 때까지 크기가 안정되길 기다리는 간격(초).
 SETTLE_INTERVAL = 1.0

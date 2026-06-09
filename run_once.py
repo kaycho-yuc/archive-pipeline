@@ -2,7 +2,13 @@
 
 import logging
 
-from extractors.extract import IMAGE_EXTENSIONS, PDF_EXTENSIONS, TEXT_EXTENSIONS
+from extractors.extract import (
+    HWP_EXTENSIONS,
+    HWPX_EXTENSIONS,
+    IMAGE_EXTENSIONS,
+    PDF_EXTENSIONS,
+    TEXT_EXTENSIONS,
+)
 from pipeline import (
     ARCHIVE_DIR,
     INBOX_DIR,
@@ -17,7 +23,13 @@ logging.basicConfig(
 )
 logger = logging.getLogger("archive_pipeline")
 
-SUPPORTED_EXTENSIONS = PDF_EXTENSIONS | IMAGE_EXTENSIONS | TEXT_EXTENSIONS
+SUPPORTED_EXTENSIONS = (
+    PDF_EXTENSIONS
+    | IMAGE_EXTENSIONS
+    | TEXT_EXTENSIONS
+    | HWP_EXTENSIONS
+    | HWPX_EXTENSIONS
+)
 
 
 def main():

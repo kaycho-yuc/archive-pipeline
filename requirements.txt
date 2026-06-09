@@ -5,3 +5,5 @@ ollama
 python-dotenv
 Pillow
 pymupdf
+pyhwp
+six
