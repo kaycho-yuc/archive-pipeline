@@ -14,6 +14,7 @@ keep-warm 없음: 모델은 Ollama 기본값대로 유휴 시 알아서 내려�
 import json
 import logging
 import os
+import re
 import threading
 import urllib.parse
 import urllib.request
@@ -36,6 +37,13 @@ KB_ID = os.getenv("OPENWEBUI_KB_ID", "")
 MODEL = os.getenv("TELEGRAM_RAG_MODEL", "llama3.1:8b")
 
 _TG = f"https://api.telegram.org/bot{TOKEN}"
+
+# 추론형 모델(qwen 등)이 답 앞에 붙이는 <think>…</think> 사고 과정을 제거한다.
+_THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
+
+
+def _strip_thinking(text: str) -> str:
+    return _THINK_RE.sub("", text).strip()
 
 WELCOME = (
     "📚 KC 지식베이스 봇입니다.\n"
@@ -83,7 +91,8 @@ def ask_knowledge_base(question: str) -> str:
     with urllib.request.urlopen(req, timeout=300) as r:
         result = json.loads(r.read().decode("utf-8"))
 
-    answer = (result.get("choices") or [{}])[0].get("message", {}).get("content", "").strip()
+    answer = (result.get("choices") or [{}])[0].get("message", {}).get("content", "")
+    answer = _strip_thinking(answer)
     if not answer:
         return "답을 만들지 못했습니다. 질문을 바꿔 다시 시도해 주세요."
 
