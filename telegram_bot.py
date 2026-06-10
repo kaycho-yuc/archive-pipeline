@@ -104,7 +104,7 @@ def ask_knowledge_base(question: str) -> str:
             if name and name not in titles:
                 titles.append(name)
     if titles:
-        answer += "\n\n📎 참고한 노트:\n" + "\n".join(f"· {t}" for t in titles[:6])
+        answer += "\n\n📎 참고한 노트:\n" + "\n".join(f"· {t}" for t in titles[:10])
     return answer
 
 
