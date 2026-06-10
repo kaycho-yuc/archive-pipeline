@@ -1,0 +1,101 @@
+---
+name: personal-vault
+description: Operate the archive-pipeline personal knowledge vault — check health, sync notes to the Telegram RAG bot, add a project, or diagnose a freeze. Invoke when the user wants to run, check, fix, or extend their document pipeline / second-brain / Obsidian-RAG / Telegram bot system.
+---
+
+# Personal Vault — operations hub
+
+This is the owner's one-word entry point to operate their local document pipeline +
+RAG + Telegram bot. The owner is a **non-programmer** and returns infrequently, so:
+
+- **Always start by presenting the menu below** (and a quick health summary), then do what they pick.
+- Explain in plain language. Confirm before anything destructive (deletes, KB resets, model removal).
+- Project root: `C:\Users\OWNER\Documents\archive-pipeline`. Config/secrets in `.env`.
+- Background context lives in `OVERVIEW.md`, `ROADMAP.md`, `SYSTEM-HANDOFF.md`, and the
+  assistant memory at `~/.claude/projects/.../memory/` — consult them for the "why".
+
+## What to do when invoked
+
+1. Run the **health check** (operation 1) and show a short status table.
+2. Present this menu and ask which they want:
+
+   ```
+   무엇을 할까요? (What would you like to do?)
+   1) 상태 점검        — is everything working?
+   2) 볼트 → 봇 동기화  — push new/edited notes into the Telegram bot's knowledge
+   3) 프로젝트 추가     — set up a new project (beyond 성수동 리모델링)
+   4) 멈춤 원인 진단    — diagnose a freeze / slowdown
+   ```
+
+3. Execute the chosen operation below.
+
+---
+
+## Operation 1 — Health check (read-only, safe)
+
+Report each as ✅/❌ with one line:
+
+- **Watcher task:** `Get-ScheduledTask ArchivePipelineWatch` → State should be `Running`.
+- **Ollama:** `Invoke-WebRequest http://127.0.0.1:11434/api/tags` → 200; `ollama ps` for loaded models.
+- **Open WebUI:** `docker ps` → `open-webui` Up & `127.0.0.1:3000` (must be localhost-only, NOT 0.0.0.0).
+- **Monitor:** tail `resource_log.csv` → rows within the last ~minute means it's logging.
+- **Recent processing:** tail `processing_log.csv` and `watch.log` for the latest results / errors.
+- **Bot model:** read `TELEGRAM_RAG_MODEL` from `.env` (currently `exaone3.5:7.8b`).
+
+If the watcher is stopped, restart it with **Stop then Start** (this PowerShell has **no**
+`Restart-ScheduledTask`):
+`Stop-ScheduledTask ArchivePipelineWatch; Start-Sleep 2; Start-ScheduledTask ArchivePipelineWatch`.
+
+If Open WebUI is missing after a reboot/crash, recreate it **localhost-only**:
+`docker run -d --name open-webui --restart always -p 127.0.0.1:3000:8080 -v open-webui:/app/backend/data --add-host=host.docker.internal:host-gateway ghcr.io/open-webui/open-webui:main`
+
+## Operation 2 — Sync vault → bot knowledge base
+
+Use when the owner added/edited notes and wants the Telegram bot to know them.
+
+Run `python ingest_vault.py` (it reads `OPENWEBUI_*` from `.env`). Gotchas to apply:
+
+- **Warm the embedder first** so it doesn't fail on cold start:
+  `POST http://127.0.0.1:11434/api/embeddings {"model":"bge-m3","prompt":"warmup"}`.
+- The script already **retries** the transient "Cannot connect to host" 400 (Ollama reload).
+- For a **clean** rebuild (after many edits), reset first — but warn the owner this is destructive:
+  `POST /api/v1/knowledge/{KB}/reset` then `DELETE /api/v1/files/all`, then re-run.
+- **Do NOT trust the OK/fail tally** — KB `reset` doesn't clear the content-hash dedup, so you'll
+  see many "Duplicate content detected" that are actually fine. **Verify with coverage queries**
+  (`POST /api/v1/retrieval/query/collection`) across a few topics, and the authoritative linked
+  count from a `file/add` response. KB id is in `.env` (`OPENWEBUI_KB_ID`).
+
+## Operation 3 — Add a new project (Phase 6)
+
+Today all work notes default to `성수동 리모델링` (deterministic, in `notes/write_note.py` via
+`.env DEFAULT_WORK_PROJECT`). When a 2nd project appears:
+
+1. Decide detection rule: keyword/address match (e.g. lot numbers like 685-317) first, LLM
+   inference as fallback. Add `project` to the `Classification` schema in `classifier/classify.py`.
+2. Keep a list of known projects; have `write_note.py` use the detected project instead of the default.
+3. Backfill existing notes with the `migrate_add_project.py` pattern (backup → dry-run → `--execute`).
+4. Re-sync the bot (Operation 2). See `ROADMAP.md` §5 Phase 6.
+
+This is a real code change — explain the plan, get the owner's OK, write tests, run `pytest -q`.
+
+## Operation 4 — Diagnose a freeze / slowdown
+
+The resource monitor is the black box. Read the **last rows** of `resource_log.csv`
+(columns: time, ram_used_gb, ram_total_gb, cpu_pct, gpu_mem_used_mb, gpu_mem_total_mb,
+gpu_util_pct, ollama_models). Look for:
+
+- **VRAM near 16 GB** with a big model loaded → the known freeze cause is `gemma4:26b` (18 GB)
+  overflowing the 16 GB RTX 4080. Never let the bot/Open WebUI auto-load it; keep the bot on a
+  small model (`exaone3.5:7.8b`).
+- The **last row before a gap** = the state right before the freeze.
+- High RAM with Revit/Enscape running → suggest `pause_ai.ps1` to free ~9 GB RAM + all VRAM
+  before heavy GPU work; `resume_ai.ps1` to bring the AI stack back.
+
+---
+
+## Notes for the assistant
+
+- Prefer the project's own tools/scripts over ad-hoc commands.
+- Run `python run_once.py` to process the inbox once on demand; `pytest -q` for the suite.
+- Never expose Open WebUI beyond `127.0.0.1` (another tailnet user must not reach the private vault).
+- This skill is a runbook for interactive use; unattended automation stays in the Task Scheduler job.
