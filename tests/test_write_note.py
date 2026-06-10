@@ -21,6 +21,7 @@ def test_write_note_uses_domain_and_quarter_folder(tmp_path):
     text = path.read_text(encoding="utf-8")
     assert "title: 주간 회의 정리" in text
     assert "domain: 업무" in text
+    assert "project: 성수동 리모델링" in text  # 업무 노트엔 프로젝트가 들어간다
     assert "source: meeting.pdf" in text
     # category 가 첫 태그, 모델 태그가 뒤따른다.
     assert "tags:\n  - 회의록\n  - 성수동\n  - 공정" in text
@@ -32,6 +33,8 @@ def test_write_note_personal_goes_to_20(tmp_path):
     result = Classification(domain="개인", category="메모", title="생각", summary="s")
     path = write_note(result, "x.txt", "c", tmp_path)
     assert path == tmp_path / "20_Personal" / _Q / "생각.md"
+    # 개인 노트엔 project 필드를 넣지 않는다.
+    assert "project:" not in path.read_text(encoding="utf-8")
 
 
 def test_write_note_avoids_collision(tmp_path):

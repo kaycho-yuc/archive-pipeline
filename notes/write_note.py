@@ -1,5 +1,6 @@
 """Classification 결과를 Obsidian 마크다운 노트로 저장하는 모듈."""
 
+import os
 import re
 from datetime import datetime
 from pathlib import Path
@@ -12,6 +13,11 @@ _INVALID_CHARS = re.compile(r'[\\/:*?"<>|]')
 # domain 별 최상위 폴더. 세부 분류는 폴더가 아니라 태그로 한다(얕은 시간 기반 구조).
 _DOMAIN_FOLDERS = {"업무": "10_Professional", "개인": "20_Personal"}
 _FALLBACK_FOLDER = "90_System"
+
+# 업무 노트에는 어떤 프로젝트인지 frontmatter 에 기록한다. 현재는 단일 프로젝트라
+# 기본값을 쓰고, 프로젝트가 늘면 분류기에서 추론하도록 확장한다(.env 로 변경 가능).
+_WORK_DOMAIN = "업무"
+DEFAULT_WORK_PROJECT = os.getenv("DEFAULT_WORK_PROJECT", "성수동 리모델링")
 
 
 def _sanitize(name: str) -> str:
@@ -59,10 +65,14 @@ def _build_markdown(
     result: Classification, source_name: str, content: str, created: datetime
 ) -> str:
     tags = _merge_tags(result)
+    # 업무 노트에만 project 필드를 넣는다(개인 노트엔 의미 없음).
+    project_line = (
+        f"project: {DEFAULT_WORK_PROJECT}\n" if result.domain == _WORK_DOMAIN else ""
+    )
     return f"""---
 title: {result.title}
 domain: {result.domain}
-category: {result.category}
+{project_line}category: {result.category}
 {_format_tags(tags)}
 source: {source_name}
 created: {created.strftime("%Y-%m-%d %H:%M")}
