@@ -1,5 +1,5 @@
 ---
-name: personal-vault
+name: my-vault
 description: Operate the archive-pipeline personal knowledge vault — check health, sync notes to the Telegram RAG bot, add a project, or diagnose a freeze. Invoke when the user wants to run, check, fix, or extend their document pipeline / second-brain / Obsidian-RAG / Telegram bot system.
 ---
 
