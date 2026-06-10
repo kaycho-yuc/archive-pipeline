@@ -16,9 +16,11 @@ logging.basicConfig(
     handlers=[logging.FileHandler("watch.log", encoding="utf-8")],
 )
 
-import run_once  # noqa: E402  (로깅 설정 후 임포트)
+import monitor  # noqa: E402  (로깅 설정 후 임포트)
+import run_once  # noqa: E402
 import watch  # noqa: E402
 
 if __name__ == "__main__":
+    monitor.start_monitor()  # 리소스 블랙박스(데몬 스레드, 감시기와 함께 종료)
     run_once.main()  # 감시 시작 전, 이미 쌓여 있던 파일을 먼저 처리
     watch.main()  # 이후 새로 들어오는 파일을 상시 감시

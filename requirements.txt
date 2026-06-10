@@ -7,3 +7,4 @@ Pillow
 pymupdf
 pyhwp
 six
+psutil
