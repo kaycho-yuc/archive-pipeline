@@ -18,9 +18,11 @@ logging.basicConfig(
 
 import monitor  # noqa: E402  (로깅 설정 후 임포트)
 import run_once  # noqa: E402
+import telegram_bot  # noqa: E402
 import watch  # noqa: E402
 
 if __name__ == "__main__":
     monitor.start_monitor()  # 리소스 블랙박스(데몬 스레드, 감시기와 함께 종료)
+    telegram_bot.start_bot()  # 텔레그램 RAG 봇(데몬 스레드, 설정 없으면 건너뜀)
     run_once.main()  # 감시 시작 전, 이미 쌓여 있던 파일을 먼저 처리
     watch.main()  # 이후 새로 들어오는 파일을 상시 감시
