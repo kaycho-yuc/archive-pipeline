@@ -61,9 +61,12 @@ TELEGRAM_RAG_MODEL=exaone3.5:7.8b   # 봇 답변 모델(벤치마크로 선정)
 
 ## 실행
 
+의존성은 **uv**로 관리한다([astral.sh/uv](https://docs.astral.sh/uv/)). `uv.lock`에 정확한
+버전이 고정돼 있어 어디서든 동일한 환경이 재현된다.
+
 ```powershell
-# 의존성
-pip install -r requirements.txt
+# 의존성 설치 + 가상환경(.venv) 생성 (uv.lock 그대로 재현)
+uv sync
 
 # Ollama (모델 미리 받기)
 ollama pull llama3.1        # 분류·요약
@@ -71,14 +74,16 @@ ollama pull bge-m3          # 임베딩(한국어)
 ollama pull exaone3.5:7.8b  # 봇 답변(한국어 특화)
 
 # _inbox 일괄 처리(수동)
-python run_once.py
+uv run python run_once.py
 
 # 상시 감시 + 모니터 + 텔레그램 봇(작업 스케줄러가 부팅 시 자동 실행)
-python run_watch.py
+uv run python run_watch.py
 
 # 볼트를 RAG 지식베이스로 적재(최초 1회/노트 추가 후)
-python ingest_vault.py
+uv run python ingest_vault.py
 ```
+
+> `requirements.txt`가 필요하면 `uv export -o requirements.txt`로 만들 수 있다.
 
 상시 운영은 Windows **작업 스케줄러**의 `ArchivePipelineWatch` 작업이 `run_watch.py`를 부팅 시 실행한다.
 (이 PowerShell엔 `Restart-ScheduledTask`가 없으니 재시작은 **Stop + Start**.)
@@ -93,7 +98,7 @@ powershell -ExecutionPolicy Bypass -File resume_ai.ps1   # 다시 켜기
 ## 테스트
 
 ```powershell
-python -m pytest -q
+uv run pytest -q
 ```
 
 LLM·OCR·텔레그램 호출은 외부 의존성이라 테스트에서 모킹/격리한다. 로컬 OCR엔 Tesseract(kor+eng) 설치 필요.

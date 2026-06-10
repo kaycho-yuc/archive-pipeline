@@ -53,7 +53,7 @@ If Open WebUI is missing after a reboot/crash, recreate it **localhost-only**:
 
 Use when the owner added/edited notes and wants the Telegram bot to know them.
 
-Run `python ingest_vault.py` (it reads `OPENWEBUI_*` from `.env`). Gotchas to apply:
+Run `uv run python ingest_vault.py` (it reads `OPENWEBUI_*` from `.env`). Gotchas to apply:
 
 - **Warm the embedder first** so it doesn't fail on cold start:
   `POST http://127.0.0.1:11434/api/embeddings {"model":"bge-m3","prompt":"warmup"}`.
@@ -76,7 +76,7 @@ Today all work notes default to `성수동 리모델링` (deterministic, in `not
 3. Backfill existing notes with the `migrate_add_project.py` pattern (backup → dry-run → `--execute`).
 4. Re-sync the bot (Operation 2). See `ROADMAP.md` §5 Phase 6.
 
-This is a real code change — explain the plan, get the owner's OK, write tests, run `pytest -q`.
+This is a real code change — explain the plan, get the owner's OK, write tests, run `uv run pytest -q`.
 
 ## Operation 4 — Diagnose a freeze / slowdown
 
@@ -96,6 +96,7 @@ gpu_util_pct, ollama_models). Look for:
 ## Notes for the assistant
 
 - Prefer the project's own tools/scripts over ad-hoc commands.
-- Run `python run_once.py` to process the inbox once on demand; `pytest -q` for the suite.
+- Run `uv run python run_once.py` to process the inbox once on demand; `uv run pytest -q` for the suite.
+- Env is uv-managed (`.venv`, `uv.lock`). The autorun task runs `.venv\Scripts\pythonw.exe run_watch.py`.
 - Never expose Open WebUI beyond `127.0.0.1` (another tailnet user must not reach the private vault).
 - This skill is a runbook for interactive use; unattended automation stays in the Task Scheduler job.

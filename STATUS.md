@@ -26,10 +26,8 @@
 ```powershell
 cd <이 프로젝트 폴더>           # 예: C:\Users\OWNER\iCloudDrive\...\Projects\archive-pipeline
 
-# 맥 venv\ 는 동기화됐지만 윈도우에서 동작 안 함 — 새로 만든다
-python -m venv venv-win
-.\venv-win\Scripts\Activate.ps1
-pip install -r requirements.txt
+# 의존성은 uv로 관리 (.venv 생성 + uv.lock 재현)
+uv sync
 
 # Ollama 확인 (별도 창)
 ollama serve
@@ -39,7 +37,7 @@ ollama pull llama3.1
 echo 다음주 화요일 오후 2시 강남 현장 점검 회의. 참석자 3명. > _inbox\test.txt
 
 # 일괄 처리 실행
-python run_once.py
+uv run python run_once.py
 ```
 
 ### 성공 기준
@@ -49,7 +47,7 @@ python run_once.py
 
 ### 윈도우 주의점
 - Tesseract OCR은 **이미지** 파일일 때만 필요. PDF·텍스트는 불필요. 핸드오프상 PATH 등록 완료이나, `pytesseract`가 "tesseract not found"면 PATH 누락.
-- 동기화된 `venv\`, `__pycache__\` 는 맥 잔재이므로 무시. `venv-win` 사용.
+- 환경은 uv가 만든 `.venv\` 사용(`uv sync`). 옛 `venv\`·`venv-win\`·`__pycache__\` 는 무시/제거 대상.
 
 ## 환경 차이
 - 맥에는 Ollama·Tesseract 없음 → 맥에서는 LLM·OCR 실호출 테스트 불가. 윈도우가 실호출 검증의 본 무대.

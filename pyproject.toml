@@ -1,0 +1,33 @@
+[project]
+name = "archive-pipeline"
+version = "0.1.0"
+description = "Local document pipeline: extract → classify → Obsidian note → RAG + Telegram bot"
+requires-python = ">=3.13"
+dependencies = [
+    "pdfplumber",
+    "pytesseract",
+    "watchdog",
+    "ollama",
+    "python-dotenv",
+    "Pillow",
+    "pymupdf",
+    "pyhwp",
+    "six",
+    "psutil",
+    "requests",
+]
+
+[dependency-groups]
+dev = [
+    "pytest",
+]
+
+[tool.uv]
+# 라이브러리가 아니라 실행용 앱이므로 빌드(패키징)하지 않는다.
+package = false
+
+[tool.pytest.ini_options]
+# 앱을 패키지로 설치하지 않으므로, 테스트가 프로젝트 루트의 모듈
+# (classifier, notes, extractors 등)을 임포트할 수 있도록 루트를 경로에 넣는다.
+pythonpath = ["."]
+testpaths = ["tests"]
