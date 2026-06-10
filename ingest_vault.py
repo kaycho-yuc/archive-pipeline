@@ -74,14 +74,24 @@ def upload_file(path: Path) -> str:
     return r.json()["id"]
 
 
-def link_to_kb(kb_id: str, file_id: str) -> None:
-    r = requests.post(
-        f"{BASE}/api/v1/knowledge/{kb_id}/file/add",
-        headers=H,
-        json={"file_id": file_id},
-        timeout=300,  # 임베딩까지 동기적으로 일어나므로 넉넉히
-    )
-    r.raise_for_status()
+# 임베딩 중 Ollama 가 잠깐 끊기면(모델 재로딩 등) 이 문구가 담긴 400 이 온다.
+_TRANSIENT = "Cannot connect to host"
+
+
+def link_to_kb(kb_id: str, file_id: str, retries: int = 4) -> None:
+    """파일을 지식베이스에 연결(임베딩)한다. Ollama 일시 단절은 백오프 후 재시도한다."""
+    for attempt in range(retries):
+        r = requests.post(
+            f"{BASE}/api/v1/knowledge/{kb_id}/file/add",
+            headers=H,
+            json={"file_id": file_id},
+            timeout=300,  # 임베딩까지 동기적으로 일어나므로 넉넉히
+        )
+        if r.status_code == 400 and _TRANSIENT in r.text and attempt < retries - 1:
+            time.sleep(5 * (attempt + 1))  # 5s, 10s, 15s … Ollama 회복 대기
+            continue
+        r.raise_for_status()
+        return
 
 
 def main() -> None:
