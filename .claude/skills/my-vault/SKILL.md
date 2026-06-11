@@ -93,6 +93,19 @@ gpu_util_pct, ollama_models). Look for:
 
 ---
 
+## Note schema & naming convention
+
+- Work-note titles: **`YYYY-MM-DD <type> - <counterparty> (<detail, status>)`** (ISO 8601 + RDM/
+  Dublin Core). Frontmatter: `title, domain, project, category, doc_date, counterparty, status,
+  tags, source, created`. The classifier is **filename-first** (`source` filename is authoritative).
+- **Reference material** (templates/samples/govt manuals/other-site) → quarantined to
+  `_failed/참고자료`, never embedded. The bot answers from project data only.
+- To re-title/clean existing work notes: `uv run python migrate_revise_notes.py` (dry-run shows
+  every old→new + caches a plan) → review with owner → `uv run python migrate_revise_notes.py
+  --execute` applies the cached plan. **Auto-classification isn't perfect on noisy OCR — always
+  surface the dry-run for owner review; nothing is deleted and `source` is preserved.** Re-ingest
+  after (Operation 2).
+
 ## Notes for the assistant
 
 - Prefer the project's own tools/scripts over ad-hoc commands.

@@ -69,22 +69,23 @@ _inbox/ (iCloud)  ──감시/스윕──►  process_file()
   - **HWPX** (`.hwpx`, 한글 OWPML zip+xml): zipfile로 `Contents/section*.xml`을 열어 네임스페이스 무시하고 `t`(텍스트 런) 요소만 수집.
 - **한국어 스캔 OCR 핵심**: `kor+eng` + 그레이스케일 + autocontrast + **이진화(임계값 150)** + `--psm 6`. 이진화 없이는 한국어 인식률이 매우 낮음.
 
-### `classifier/classify.py` — 로컬 LLM 분류
-- Ollama `llama3.1:8b` 사용. **클라이언트 host를 코드에서 `127.0.0.1:11434`로 고정**(머신 환경변수 `OLLAMA_HOST=0.0.0.0`이 Windows에서 연결 불가라서 — 머신 설정은 건드리지 않고 코드에서 강제).
-- 산출물 `Classification` dataclass: `domain`(업무/개인), `category`, `title`, `tags: list[str]`.
-- **견고성 처리(긴 문서에서 LLM이 스키마를 무시하는 문제 해결)**:
-  - 입력을 `MAX_INPUT_CHARS=4000`자로 자름.
-  - 문서를 `=== 문서 시작/끝 ===` 구분자로 감싸고, **본문 뒤에 스키마를 다시 명시**.
-  - 온도를 바꿔가며 재시도 `RETRY_TEMPERATURES=(0.0, 0.4, 0.8)`, `num_predict=1024`.
-  - 파싱은 domain만 엄격 검증(개인/업무), 나머지는 기본값 허용.
+### `classifier/classify.py` — 로컬 LLM 분류 + 추출
+- Ollama 사용(분류 모델 `OLLAMA_MODEL`, 현재 **`exaone3.5:7.8b`** — 한국어 우수 + 봇과 모델 공유). **클라이언트 host를 코드에서 `127.0.0.1:11434`로 고정**.
+- **파일명 최우선(filename-first):** `classify(text, source_name)` — 원본 파일명이 유형·상대방·날짜·상태의 최고 권위 근거. 본문 OCR 은 보조(노이즈 많음).
+- 산출물 `Classification`: `domain`(업무/개인), `kind`(프로젝트자료/참고자료), `category`(통제 어휘 문서유형), `counterparty`(상대방), `doc_date`(ISO, 실재 날짜 검증), `status`(초안/최종), `tags`, `summary`, `title`.
+- **제목은 `compose_title()`로 결정적 조립**: `YYYY-MM-DD <유형> - <상대방> (<부가, 상태>)`. LLM 이 제목 문자열을 직접 만들지 않음.
+- **kind**: 참고자료(빈 양식·샘플·정부지침/매뉴얼/사례집·다른 현장)는 봇에서 제외하기 위한 판정. 확실할 때만 참고자료, 애매하면 프로젝트자료(실데이터 보호).
+- 견고성: `MAX_INPUT_CHARS=4000`, 스키마 본문 뒤 재명시, `RETRY_TEMPERATURES=(0.0,0.4,0.8)`, domain 만 엄격 검증.
 
-### `notes/write_note.py` — Obsidian 노트 작성 (볼트 스키마 v2)
-- 폴더 매핑: `업무→10_Professional`, `개인→20_Personal`, 그 외 `90_System`.
-- 분기 폴더: `_quarter(dt)` → `YYYY-QN`. 최종 경로 `vault/{top}/{quarter}/{title}.md`.
-- **분류는 깊은 폴더가 아니라 태그로**: YAML frontmatter에 `tags`(카테고리 + 모델 태그 병합), `source`, 날짜 등 기록. (Obsidian 네이티브 방식 — 이전 핸드오프의 `<METADATA>` 블록 방식은 거부함.)
+### `notes/write_note.py` — Obsidian 노트 작성 (볼트 스키마 v2 + 명명규칙)
+- 폴더 매핑: `업무→10_Professional`, `개인→20_Personal`, 그 외 `90_System`. 분기 폴더 `YYYY-QN`.
+- **Frontmatter(기계 파싱 가능, Dublin Core: 제목=사람용 라벨, frontmatter=구조화 데이터):**
+  `title, domain, project(업무만), category, doc_date, counterparty, status, tags, source, created`.
+  `doc_date/counterparty/status`는 값이 있을 때만 기록. (이전 핸드오프의 `<METADATA>` 블록 방식은 거부.)
+- 명명규칙 근거: ISO 8601(날짜), RDM 파일명 모범사례, ISO 15489/Dublin Core. `migrate_revise_notes.py`로 기존 노트 일괄 재정리(백업 → dry-run 캐시 → `--execute`).
 
 ### `pipeline.py` — 오케스트레이션
-- `process_file()`: ①SHA-256 중복검사(중복이면 추출 없이 아카이브) → ②추출 → 빈/실패 시 `_failed` 격리 + `notifier.notify` + CSV 로그 → ③분류 → ④노트 작성 → ⑤해시 기록 + 아카이브 이동.
+- `process_file()`: ①SHA-256 중복검사(중복이면 추출 없이 아카이브) → ②추출 → 빈/실패 시 `_failed` 격리 + `notifier.notify` + CSV 로그 → ③분류(`source_name` 전달) → ③.5 **참고자료면 `_failed/참고자료`로 격리(노트 미생성, 봇 임베딩 제외)** → ④노트 작성 → ⑤해시 기록 + 아카이브 이동.
 - `prune_empty_dirs()`: 처리 후 빈 하위폴더 정리(`.DS_Store/Thumbs.db/desktop.ini`는 무시).
 
 ### `notifier.py` — Telegram 알림
@@ -98,6 +99,9 @@ _inbox/ (iCloud)  ──감시/스윕──►  process_file()
 ### 마이그레이션 스크립트(1회성)
 - `migrate_vault.py`: 기존 볼트를 v2 구조로 이전. **백업(zip) → dry-run → `--execute`**. `source` 필드가 있고 도메인이 유효한 노트만 이전(손으로 쓴 노트는 보존).
 - `migrate_workout.py`: 손으로 쓴 운동일지 9개에 frontmatter 부여, 인라인 `#해시태그`를 수집해 태그로, 본문 유지, `20_Personal`로 이동.
+- `migrate_add_project.py`: 업무 노트 frontmatter 에 `project` 채움.
+- `migrate_classify_reference.py`: 기존 업무 노트를 다시 분류해 참고자료를 검토 폴더로 이동(자동 분류 보조; 사람이 최종 확정).
+- `migrate_revise_notes.py`: 기존 업무 노트를 명명규칙으로 재정리(제목·구조화 frontmatter). dry-run 이 `_revise_plan.json` 캐시를 만들고 `--execute` 가 그 결과를 그대로 적용(재분류 없음). source/created/project·원문 보존.
 
 ---
 
