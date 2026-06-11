@@ -9,6 +9,9 @@ RESULT = Classification(
     title="주간 회의 정리",
     summary="이번 주 진행 상황 요약.",
     tags=["성수동", "공정"],
+    counterparty="영진건설",
+    doc_date="2026-03-12",
+    status="초안",
 )
 
 _Q = f"{datetime.now().year}-Q{(datetime.now().month - 1) // 3 + 1}"
@@ -22,6 +25,9 @@ def test_write_note_uses_domain_and_quarter_folder(tmp_path):
     assert "title: 주간 회의 정리" in text
     assert "domain: 업무" in text
     assert "project: 성수동 리모델링" in text  # 업무 노트엔 프로젝트가 들어간다
+    assert "doc_date: 2026-03-12" in text  # 구조화 필드(있을 때만)
+    assert "counterparty: 영진건설" in text
+    assert "status: 초안" in text
     assert "source: meeting.pdf" in text
     # category 가 첫 태그, 모델 태그가 뒤따른다.
     assert "tags:\n  - 회의록\n  - 성수동\n  - 공정" in text

@@ -13,7 +13,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 import notifier
-from classifier.classify import classify
+from classifier.classify import KIND_REFERENCE, classify
 from extractors.extract import extract_text
 from notes.write_note import write_note
 
@@ -32,6 +32,9 @@ def _resolve_vault_path() -> Path:
 INBOX_DIR = Path(os.getenv("INBOX_DIR", "_inbox"))
 ARCHIVE_DIR = Path(os.getenv("ARCHIVE_DIR", "_archive"))
 FAILED_DIR = Path(os.getenv("FAILED_DIR", "_failed"))
+# 참고자료(템플릿·샘플·정부지침·다른 현장 문서)는 노트로 만들지 않고 여기 격리한다.
+# _failed 안의 별도 폴더 — 사람이 가끔 검토하고 오분류는 _inbox 로 되돌리면 된다.
+REFERENCE_DIR = Path(os.getenv("REFERENCE_DIR", str(FAILED_DIR / "참고자료")))
 PROCESSING_LOG = Path(os.getenv("PROCESSING_LOG", "processing_log.csv"))
 HASH_LOG = Path(os.getenv("HASH_LOG", "processed_hashes.json"))
 VAULT_PATH = _resolve_vault_path()
@@ -213,7 +216,16 @@ def process_file(
             notifier.notify(f"⚠️ 처리 실패(텍스트 없음): {name}\n→ _failed 로 격리됨")
             return None
 
-        result = classify(text)
+        result = classify(text, source_name=name)
+
+        # 참고자료(템플릿·샘플·정부지침·다른 현장)는 노트로 만들지 않고 격리한다.
+        # 봇 지식베이스를 프로젝트 실데이터로만 유지해 답변 정확도를 지킨다.
+        if result.domain == "업무" and result.kind == KIND_REFERENCE:
+            logger.info("참고자료로 판정, 격리(노트 미생성): %s", name)
+            _move_to(file_path, REFERENCE_DIR)
+            _log_result(name, "참고자료(격리)", "프로젝트 실데이터 아님 — 검토 폴더로 이동")
+            return None
+
         note_path = write_note(result, name, text, vault_path)
         logger.info("노트 저장: %s", note_path)
 

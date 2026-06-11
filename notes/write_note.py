@@ -69,11 +69,21 @@ def _build_markdown(
     project_line = (
         f"project: {DEFAULT_WORK_PROJECT}\n" if result.domain == _WORK_DOMAIN else ""
     )
+    # 값이 있을 때만 넣는 구조화 필드(기계 파싱용). 비면 생략해 frontmatter 를 깔끔히.
+    extra = "".join(
+        f"{key}: {value}\n"
+        for key, value in (
+            ("doc_date", result.doc_date),
+            ("counterparty", result.counterparty),
+            ("status", result.status),
+        )
+        if value
+    )
     return f"""---
 title: {result.title}
 domain: {result.domain}
 {project_line}category: {result.category}
-{_format_tags(tags)}
+{extra}{_format_tags(tags)}
 source: {source_name}
 created: {created.strftime("%Y-%m-%d %H:%M")}
 ---

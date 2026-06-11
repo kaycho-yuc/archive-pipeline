@@ -2,7 +2,7 @@ import pytest
 
 import notifier
 import pipeline
-from classifier.classify import Classification
+from classifier.classify import KIND_REFERENCE, Classification
 
 
 @pytest.fixture(autouse=True)
@@ -25,7 +25,7 @@ def test_process_file_end_to_end(tmp_path, monkeypatch):
     monkeypatch.setattr(
         pipeline,
         "classify",
-        lambda text: Classification("업무", "회의록", "메모", "요약."),
+        lambda text, source_name="": Classification("업무", "회의록", "메모", "요약."),
     )
 
     note_path = pipeline.process_file(source, vault_path=vault, archive_dir=archive)
@@ -72,6 +72,34 @@ def test_process_file_quarantines_empty(tmp_path):
     assert (failed / "empty.txt").exists()  # _failed 로 격리
 
 
+def test_process_file_quarantines_reference(tmp_path, monkeypatch):
+    # 참고자료로 분류되면 노트를 만들지 않고 참고자료 폴더로 격리한다.
+    inbox = tmp_path / "inbox"
+    inbox.mkdir()
+    reference = tmp_path / "reference"
+    vault = tmp_path / "vault"
+    source = inbox / "표준양식.txt"
+    source.write_text("빈 표준 도급계약서 양식", encoding="utf-8")
+
+    monkeypatch.setattr(pipeline, "REFERENCE_DIR", reference)
+    monkeypatch.setattr(
+        pipeline,
+        "classify",
+        lambda text, source_name="": Classification(
+            "업무", "계약서", "표준양식", "요약.", kind=KIND_REFERENCE
+        ),
+    )
+
+    note_path = pipeline.process_file(
+        source, vault_path=vault, archive_dir=tmp_path / "a", failed_dir=tmp_path / "f"
+    )
+
+    assert note_path is None
+    assert not source.exists()  # _inbox 에서 빠짐
+    assert (reference / "표준양식.txt").exists()  # 참고자료 폴더로 격리
+    assert not vault.exists()  # 노트(볼트)는 생성되지 않음
+
+
 def test_process_file_quarantines_on_classify_error(tmp_path, monkeypatch):
     inbox = tmp_path / "inbox"
     inbox.mkdir()
@@ -79,7 +107,7 @@ def test_process_file_quarantines_on_classify_error(tmp_path, monkeypatch):
     source = inbox / "memo.txt"
     source.write_text("내용 있음", encoding="utf-8")
 
-    def _boom(text):
+    def _boom(text, source_name=""):
         raise ValueError("분류 실패")
 
     monkeypatch.setattr(pipeline, "classify", _boom)
