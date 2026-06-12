@@ -7,6 +7,12 @@ from dataclasses import dataclass, field
 from datetime import date
 
 import ollama
+from dotenv import load_dotenv
+
+# 모듈이 pipeline 의 load_dotenv() 보다 먼저 임포트되므로(임포트 순서상) 여기서 직접
+# .env 를 읽어야 OLLAMA_MODEL 등 설정이 반영된다. 안 그러면 아래 기본값(llama3.1)으로
+# 떨어져 의도한 exaone3.5 가 아닌 옛 모델로 분류되는 조용한 버그가 생긴다.
+load_dotenv()
 
 DEFAULT_MODEL = os.getenv("OLLAMA_MODEL", "llama3.1")
 
