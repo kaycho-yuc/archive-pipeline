@@ -35,6 +35,21 @@ def test_write_note_uses_domain_and_quarter_folder(tmp_path):
     assert "원문 내용입니다." in text
 
 
+def test_write_note_records_origin_email_as_wikilink(tmp_path):
+    # 이메일 첨부에서 나온 노트면 출처 이메일을 위키링크로 남긴다(옵시디언 백링크).
+    path = write_note(
+        RESULT, "계약서.pdf", "원문.", tmp_path, origin_email="2026-03-17 공문 - 김기봉"
+    )
+    assert 'source_email: "[[2026-03-17 공문 - 김기봉]]"' in path.read_text(
+        encoding="utf-8"
+    )
+
+
+def test_write_note_omits_origin_email_when_absent(tmp_path):
+    path = write_note(RESULT, "meeting.pdf", "원문.", tmp_path)
+    assert "source_email:" not in path.read_text(encoding="utf-8")
+
+
 def test_write_note_personal_goes_to_20(tmp_path):
     result = Classification(domain="개인", category="메모", title="생각", summary="s")
     path = write_note(result, "x.txt", "c", tmp_path)

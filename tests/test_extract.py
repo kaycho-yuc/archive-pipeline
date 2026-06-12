@@ -106,6 +106,18 @@ def test_extract_xml_generic_fallback(tmp_path):
     assert "안건 검토" in text
 
 
+def test_supported_attachment_filters_types():
+    from extractors.extract import _supported_attachment
+
+    assert _supported_attachment("철거해체계약서.pdf")
+    assert _supported_attachment("내역서.xlsx")
+    assert _supported_attachment("공문.hwp")
+    # 비문서·중첩 이메일은 제외(무한 재귀·노이즈 방지).
+    assert not _supported_attachment("smime.p7s")
+    assert not _supported_attachment("winmail.dat")
+    assert not _supported_attachment("forwarded.msg")
+
+
 def test_extract_unsupported_extension():
     with pytest.raises(ValueError):
         extract_text(Path("unsupported.xyz"))

@@ -62,7 +62,11 @@ def _unique_path(path: Path) -> Path:
 
 
 def _build_markdown(
-    result: Classification, source_name: str, content: str, created: datetime
+    result: Classification,
+    source_name: str,
+    content: str,
+    created: datetime,
+    origin_email: str | None = None,
 ) -> str:
     tags = _merge_tags(result)
     # 업무 노트에만 project 필드를 넣는다(개인 노트엔 의미 없음).
@@ -79,13 +83,15 @@ def _build_markdown(
         )
         if value
     )
+    # 이메일 첨부에서 나온 노트면 출처 이메일을 위키링크로 남긴다(옵시디언 백링크 생성).
+    email_line = f'source_email: "[[{origin_email}]]"\n' if origin_email else ""
     return f"""---
 title: {result.title}
 domain: {result.domain}
 {project_line}category: {result.category}
 {extra}{_format_tags(tags)}
 source: {source_name}
-created: {created.strftime("%Y-%m-%d %H:%M")}
+{email_line}created: {created.strftime("%Y-%m-%d %H:%M")}
 ---
 
 ## 요약
@@ -103,10 +109,12 @@ def write_note(
     source_name: str,
     content: str,
     vault_path: Path,
+    origin_email: str | None = None,
 ) -> Path:
     """볼트 내 {10_/20_ 도메인}/{YYYY-QN}/ 아래에 노트를 저장하고 경로를 반환한다.
 
     세부 분류는 폴더가 아니라 frontmatter tags 로 한다(검색·RAG 친화적인 얕은 구조).
+    origin_email 이 있으면(이메일 첨부에서 나온 노트) 출처 이메일 위키링크를 기록한다.
     """
     created = datetime.now()
     top = _DOMAIN_FOLDERS.get(result.domain, _FALLBACK_FOLDER)
@@ -115,6 +123,7 @@ def write_note(
 
     note_path = _unique_path(folder / f"{_sanitize(result.title)}.md")
     note_path.write_text(
-        _build_markdown(result, source_name, content, created), encoding="utf-8"
+        _build_markdown(result, source_name, content, created, origin_email),
+        encoding="utf-8",
     )
     return note_path

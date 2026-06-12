@@ -159,14 +159,50 @@ def extract_docx_text(file_path: Path) -> str:
     return "\n".join(paragraphs).strip()
 
 
+def _supported_attachment(name: str) -> bool:
+    """첨부 파일명이 파이프라인이 처리할 수 있는 형식인지 판단한다.
+
+    중첩 .msg(이메일 속 이메일)는 무한 재귀를 막기 위해 제외한다."""
+    suffix = Path(name).suffix.lower()
+    return suffix in SUPPORTED_EXTENSIONS and suffix not in MSG_EXTENSIONS
+
+
+def _attachment_name(att) -> str | None:
+    """첨부의 표시용 파일명(긴 이름 우선, 없으면 짧은 이름)."""
+    return getattr(att, "longFilename", None) or getattr(att, "shortFilename", None)
+
+
+def msg_attachments(file_path: Path) -> list[tuple[str, bytes]]:
+    """.msg 이메일에서 '처리 가능한 첨부'를 (파일명, 바이트) 목록으로 돌려준다.
+
+    파이프라인이 각 첨부를 독립 파일로 다시 처리해 자체 노트로 만들 수 있게 한다.
+    smime.p7s·winmail.dat 같은 비문서, 중첩 이메일(.msg, data 가 bytes 아님),
+    깨진/웹 첨부(data 가 None)는 건너뛴다."""
+    import extract_msg
+
+    out: list[tuple[str, bytes]] = []
+    with extract_msg.openMsg(str(file_path)) as msg:
+        for att in msg.attachments:
+            data = getattr(att, "data", None)
+            if not isinstance(data, (bytes, bytearray)):
+                continue  # 중첩 .msg(MSGFile)·깨진/웹 첨부(None) 등은 제외
+            name = _attachment_name(att)
+            if name and _supported_attachment(name):
+                out.append((name, bytes(data)))
+    return out
+
+
 def extract_msg_text(file_path: Path) -> str:
-    """아웃룩 이메일(.msg)에서 제목·발신자·본문을 추출한다."""
+    """아웃룩 이메일(.msg)에서 제목·발신자·본문·첨부 목록을 추출한다."""
     import extract_msg
 
     with extract_msg.openMsg(str(file_path)) as msg:
         subject = msg.subject or ""
         sender = msg.sender or ""
         body = msg.body or ""
+        attachments = [
+            name for att in msg.attachments if (name := _attachment_name(att))
+        ]
     lines = []
     if subject:
         lines.append(f"제목: {subject}")
@@ -174,6 +210,8 @@ def extract_msg_text(file_path: Path) -> str:
         lines.append(f"발신자: {sender}")
     if body:
         lines.append(body.strip())
+    if attachments:
+        lines.append("첨부파일: " + ", ".join(attachments))
     return "\n".join(lines).strip()
 
 

@@ -35,6 +35,48 @@ def test_process_file_end_to_end(tmp_path, monkeypatch):
     assert (archive / "memo.txt").exists()  # _archive 로 이동
 
 
+def test_process_file_explodes_msg_attachments(tmp_path, monkeypatch):
+    # .msg 는 이메일 노트 1개 + 각 첨부가 독립 노트가 되고, 첨부 노트엔 출처 이메일이 남는다.
+    inbox = tmp_path / "inbox"
+    inbox.mkdir()
+    vault = tmp_path / "vault"
+    archive = tmp_path / "archive"
+
+    mail = inbox / "mail.msg"
+    mail.write_bytes(b"fake-msg-bytes")
+
+    monkeypatch.setattr(pipeline, "INBOX_DIR", inbox)
+    monkeypatch.setattr(
+        pipeline,
+        "msg_attachments",
+        lambda path: [("계약서.pdf", b"PDF"), ("내역서.xlsx", b"XLSX")],
+    )
+    monkeypatch.setattr(pipeline, "extract_text", lambda path: f"내용 {path.name}")
+
+    def _classify(text, source_name=""):
+        if source_name.endswith(".msg"):
+            return Classification("업무", "공문", "메일 - 김기봉", "요약.")
+        return Classification("업무", "계약서", f"문서-{source_name}", "요약.")
+
+    monkeypatch.setattr(pipeline, "classify", _classify)
+
+    note_path = pipeline.process_file(mail, vault_path=vault, archive_dir=archive)
+
+    assert note_path is not None and note_path.exists()  # 이메일 노트
+    assert (archive / "mail.msg").exists()  # 이메일 원본 아카이브
+    assert (archive / "계약서.pdf").exists()  # 첨부도 처리 후 아카이브
+    assert (archive / "내역서.xlsx").exists()
+
+    # 이메일 노트 자신엔 출처 링크가 없고, 첨부 노트엔 출처 이메일 위키링크가 있다.
+    assert "source_email:" not in note_path.read_text(encoding="utf-8")
+    attachment_notes = [p for p in vault.rglob("*.md") if p != note_path]
+    assert len(attachment_notes) == 2
+    for note in attachment_notes:
+        assert f'source_email: "[[{note_path.stem}]]"' in note.read_text(
+            encoding="utf-8"
+        )
+
+
 def test_prune_empty_dirs_removes_empty_and_junk(tmp_path):
     root = tmp_path / "inbox"
     (root / "empty").mkdir(parents=True)

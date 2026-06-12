@@ -14,7 +14,7 @@ from dotenv import load_dotenv
 
 import notifier
 from classifier.classify import KIND_REFERENCE, classify
-from extractors.extract import extract_text
+from extractors.extract import MSG_EXTENSIONS, extract_text, msg_attachments
 from notes.write_note import write_note
 
 load_dotenv()
@@ -182,16 +182,52 @@ def _move_to(file_path: Path, dest_dir: Path) -> Path:
     return dest
 
 
+def _explode_msg_attachments(
+    msg_path: Path,
+    origin_email: str,
+    vault_path: Path,
+    archive_dir: Path,
+    failed_dir: Path,
+) -> None:
+    """이메일(.msg)의 첨부를 _inbox 에 풀어 각각 독립 파일로 다시 처리한다.
+
+    각 첨부는 자체 파일명으로 분류돼 별도 노트가 되고(계약서·내역서 등),
+    origin_email(출처 이메일 노트 제목)을 받아 노트에 출처 위키링크를 남긴다.
+    한 첨부의 실패가 전체를 막지 않도록 개별로 감싼다."""
+    try:
+        attachments = msg_attachments(msg_path)
+    except Exception:
+        logger.exception("이메일 첨부 목록 추출 실패(건너뜀): %s", msg_path.name)
+        return
+    for name, data in attachments:
+        try:
+            INBOX_DIR.mkdir(parents=True, exist_ok=True)
+            dest = INBOX_DIR / name
+            counter = 1
+            while dest.exists():
+                dest = INBOX_DIR / f"{Path(name).stem}-{counter}{Path(name).suffix}"
+                counter += 1
+            dest.write_bytes(data)
+            logger.info("이메일 첨부 처리: %s ← %s", dest.name, msg_path.name)
+            process_file(dest, vault_path, archive_dir, failed_dir, origin_email)
+        except Exception:
+            logger.exception("이메일 첨부 처리 실패(건너뜀): %s ← %s", name, msg_path.name)
+
+
 def process_file(
     file_path: Path,
     vault_path: Path = VAULT_PATH,
     archive_dir: Path = ARCHIVE_DIR,
     failed_dir: Path = FAILED_DIR,
+    origin_email: str | None = None,
 ) -> Path | None:
     """파일 하나를 처리해 생성된 노트 경로를 반환한다. 실패 시 None.
 
     추출 불가(빈 텍스트)·분류 실패한 파일은 _failed 로 격리해, 매 로그인마다
     같은 파일을 무한 재시도(재OCR·재호출)하지 않도록 한다.
+
+    origin_email 이 있으면 이메일 첨부에서 나온 파일이라는 뜻으로, 생성 노트에
+    출처 이메일 위키링크를 남긴다.
     """
     name = file_path.name
     logger.info("처리 시작: %s", name)
@@ -226,13 +262,19 @@ def process_file(
             _log_result(name, "참고자료(격리)", "프로젝트 실데이터 아님 — 검토 폴더로 이동")
             return None
 
-        note_path = write_note(result, name, text, vault_path)
+        note_path = write_note(result, name, text, vault_path, origin_email=origin_email)
         logger.info("노트 저장: %s", note_path)
 
         _record_hash(file_hash, name, str(note_path))
-        _move_to(file_path, archive_dir)
+        archived = _move_to(file_path, archive_dir)
         logger.info("아카이브 이동 완료: %s", name)
         _log_result(name, "저장", str(note_path))
+
+        # 이메일이면 첨부를 풀어 각각 독립 노트로 만든다(출처 이메일 = 방금 만든 이 노트).
+        if archived.suffix.lower() in MSG_EXTENSIONS:
+            _explode_msg_attachments(
+                archived, note_path.stem, vault_path, archive_dir, failed_dir
+            )
         return note_path
     except Exception as error:
         logger.exception("처리 실패, 격리: %s", name)
