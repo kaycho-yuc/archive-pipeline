@@ -170,15 +170,39 @@ def prune_empty_dirs(root: Path) -> None:
                 logger.debug("빈 폴더 제거 실패(건너뜀): %s", dirpath)
 
 
-def _move_to(file_path: Path, dest_dir: Path) -> Path:
-    """파일을 dest_dir 로 옮긴다. 같은 이름이 있으면 -1, -2 … 를 붙인다."""
+# iCloud 가 동기화 중인 파일은 shutil.move(복사 후 원본 unlink)가 무한정 멈출 수 있다.
+# 한 파일의 멈춤이 전체 파이프라인을 얼리지 않도록 이동에 시간 제한을 둔다.
+MOVE_TIMEOUT = float(os.getenv("MOVE_TIMEOUT", "20"))
+
+
+def _move_to(file_path: Path, dest_dir: Path, timeout: float = MOVE_TIMEOUT) -> Path:
+    """파일을 dest_dir 로 옮긴다. 같은 이름이 있으면 -1, -2 … 를 붙인다.
+
+    iCloud 동기화로 이동이 멈추는 경우를 대비해 별도 스레드에서 수행하고 timeout
+    안에 못 끝내면 TimeoutError 를 던진다(호출부가 격리/보류로 처리)."""
     dest_dir.mkdir(parents=True, exist_ok=True)
     dest = dest_dir / file_path.name
     counter = 1
     while dest.exists():
         dest = dest_dir / f"{file_path.stem}-{counter}{file_path.suffix}"
         counter += 1
-    shutil.move(str(file_path), str(dest))
+
+    outcome: dict = {}
+
+    def _do() -> None:
+        try:
+            shutil.move(str(file_path), str(dest))
+            outcome["ok"] = True
+        except Exception as exc:  # noqa: BLE001 — 스레드 내 예외를 호출부로 전달
+            outcome["err"] = exc
+
+    worker = threading.Thread(target=_do, daemon=True)
+    worker.start()
+    worker.join(timeout)
+    if worker.is_alive():
+        raise TimeoutError(f"파일 이동 시간 초과({timeout:.0f}s): {file_path.name}")
+    if "err" in outcome:
+        raise outcome["err"]
     return dest
 
 
@@ -276,6 +300,13 @@ def process_file(
                 archived, note_path.stem, vault_path, archive_dir, failed_dir
             )
         return note_path
+    except TimeoutError as error:
+        # iCloud 동기화 등으로 파일 이동이 멈춤. 전체를 얼리지 않도록 이번엔 보류하고
+        # 다음 파일로 넘어간다(파일은 _inbox 에 남아 다음 스윕에서 재시도). 노트가 이미
+        # 만들어졌다면 해시로 중복 처리되므로 노트가 중복 생성되지는 않는다.
+        logger.warning("이동 지연으로 보류(다음 스윕 재시도): %s — %s", name, error)
+        _log_result(name, "보류(이동지연)", str(error))
+        return None
     except Exception as error:
         logger.exception("처리 실패, 격리: %s", name)
         try:

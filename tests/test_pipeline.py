@@ -77,6 +77,48 @@ def test_process_file_explodes_msg_attachments(tmp_path, monkeypatch):
         )
 
 
+def test_move_to_times_out_when_move_hangs(tmp_path, monkeypatch):
+    # iCloud 동기화로 shutil.move 가 멈추는 상황을 흉내내 시간 제한이 동작하는지 본다.
+    import time
+
+    src = tmp_path / "stuck.txt"
+    src.write_text("x", encoding="utf-8")
+    monkeypatch.setattr(pipeline.shutil, "move", lambda s, d: time.sleep(5))
+
+    with pytest.raises(TimeoutError):
+        pipeline._move_to(src, tmp_path / "archive", timeout=0.5)
+
+
+def test_process_file_defers_on_move_timeout(tmp_path, monkeypatch):
+    # 이동이 멈추면(타임아웃) 전체를 실패시키지 않고 '보류'로 넘어가고 알림도 보내지 않는다.
+    inbox = tmp_path / "inbox"
+    inbox.mkdir()
+    source = inbox / "memo.txt"
+    source.write_text("내용 있음", encoding="utf-8")
+
+    monkeypatch.setattr(
+        pipeline,
+        "classify",
+        lambda text, source_name="": Classification("업무", "회의록", "메모", "요약."),
+    )
+
+    def _hang(file_path, dest_dir, timeout=pipeline.MOVE_TIMEOUT):
+        raise TimeoutError("파일 이동 시간 초과")
+
+    monkeypatch.setattr(pipeline, "_move_to", _hang)
+
+    notified = []
+    monkeypatch.setattr(pipeline.notifier, "notify", lambda msg: notified.append(msg))
+
+    note_path = pipeline.process_file(
+        source, vault_path=tmp_path / "v", archive_dir=tmp_path / "a", failed_dir=tmp_path / "f"
+    )
+
+    assert note_path is None
+    assert source.exists()  # _inbox 에 남아 다음 스윕에서 재시도
+    assert notified == []  # 보류는 실패 알림을 보내지 않음
+
+
 def test_prune_empty_dirs_removes_empty_and_junk(tmp_path):
     root = tmp_path / "inbox"
     (root / "empty").mkdir(parents=True)
