@@ -15,6 +15,9 @@ dependencies = [
     "six",
     "psutil",
     "requests",
+    "extract-msg",
+    "openpyxl",
+    "python-docx",
 ]
 
 [dependency-groups]

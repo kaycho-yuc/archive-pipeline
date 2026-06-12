@@ -18,6 +18,25 @@ IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".tiff", ".tif"}
 TEXT_EXTENSIONS = {".txt", ".md"}
 HWP_EXTENSIONS = {".hwp"}  # 한글 v5 바이너리(OLE)
 HWPX_EXTENSIONS = {".hwpx"}  # 한글 OWPML(zip+xml)
+XLSX_EXTENSIONS = {".xlsx", ".xls"}
+DOCX_EXTENSIONS = {".docx"}
+MSG_EXTENSIONS = {".msg"}
+XML_EXTENSIONS = {".xml"}  # 전자세금계산서(NTS) 등 구조화 XML
+
+# 파이프라인이 받아들이는 전체 확장자 집합(단일 진실 공급원).
+# run_once.py·watch.py 가 _inbox 를 거를 때 이 집합을 임포트해 쓴다 — 여기에만 추가하면
+# 두 진입점이 동시에 새 형식을 인식한다.
+SUPPORTED_EXTENSIONS = (
+    PDF_EXTENSIONS
+    | IMAGE_EXTENSIONS
+    | TEXT_EXTENSIONS
+    | HWP_EXTENSIONS
+    | HWPX_EXTENSIONS
+    | XLSX_EXTENSIONS
+    | DOCX_EXTENSIONS
+    | MSG_EXTENSIONS
+    | XML_EXTENSIONS
+)
 
 OCR_LANGUAGES = "kor+eng"
 
@@ -109,6 +128,128 @@ def extract_hwpx_text(file_path: Path) -> str:
     return "\n".join(parts).strip()
 
 
+def extract_xlsx_text(file_path: Path) -> str:
+    """엑셀 파일(.xlsx/.xls)에서 모든 시트의 셀 텍스트를 추출한다."""
+    import openpyxl
+
+    wb = openpyxl.load_workbook(file_path, read_only=True, data_only=True)
+    parts = []
+    for sheet in wb.worksheets:
+        parts.append(f"[시트: {sheet.title}]")
+        for row in sheet.iter_rows(values_only=True):
+            cells = [str(c) for c in row if c is not None and str(c).strip()]
+            if cells:
+                parts.append("\t".join(cells))
+    wb.close()
+    return "\n".join(parts).strip()
+
+
+def extract_docx_text(file_path: Path) -> str:
+    """워드 파일(.docx)에서 단락 텍스트를 추출한다."""
+    import docx
+
+    doc = docx.Document(str(file_path))
+    paragraphs = [p.text for p in doc.paragraphs if p.text.strip()]
+    # 표(table) 안의 텍스트도 수집한다.
+    for table in doc.tables:
+        for row in table.rows:
+            cells = [c.text.strip() for c in row.cells if c.text.strip()]
+            if cells:
+                paragraphs.append("\t".join(cells))
+    return "\n".join(paragraphs).strip()
+
+
+def extract_msg_text(file_path: Path) -> str:
+    """아웃룩 이메일(.msg)에서 제목·발신자·본문을 추출한다."""
+    import extract_msg
+
+    with extract_msg.openMsg(str(file_path)) as msg:
+        subject = msg.subject or ""
+        sender = msg.sender or ""
+        body = msg.body or ""
+    lines = []
+    if subject:
+        lines.append(f"제목: {subject}")
+    if sender:
+        lines.append(f"발신자: {sender}")
+    if body:
+        lines.append(body.strip())
+    return "\n".join(lines).strip()
+
+
+# 전자세금계산서(NTS) XML 에서 뽑을 핵심 필드 — 로컬 태그 이름(네임스페이스 무시) → 라벨.
+# 국세청 표준 스키마의 영문 태그명을 기준으로 하되, 없으면 일반 XML 폴백으로 넘어간다.
+_TAX_INVOICE_FIELDS = {
+    "IssueDate": "작성일자",
+    "ChargeTotal": "공급가액",
+    "TaxTotal": "세액",
+    "GrandTotal": "합계금액",
+}
+# 공급자/공급받는자 같은 당사자 블록에서 뽑을 하위 필드.
+_TAX_PARTY_FIELDS = {
+    "NameName": "상호",
+    "CompanyRegNumNumber": "사업자등록번호",
+}
+
+
+def extract_xml_text(file_path: Path) -> str:
+    """구조화 XML(전자세금계산서 등)에서 텍스트를 추출한다.
+
+    국세청 전자세금계산서 스키마를 알아보면 핵심 필드를 라벨과 함께 뽑아 분류기가
+    category=세금계산서·상대방·날짜를 잡기 쉽게 한다. 인식 못 하는 스키마면 모든
+    요소의 텍스트를 그대로 모으는 일반 XML 폴백으로 처리한다(extract_hwpx_text 와
+    같은 네임스페이스-무시 방식)."""
+    tree = ET.parse(file_path)
+    root = tree.getroot()
+
+    def _local(tag: str) -> str:
+        return tag.rsplit("}", 1)[-1]
+
+    # 전자세금계산서 스키마 감지: 루트 또는 하위에 TaxInvoice 요소가 있으면 구조화 파싱.
+    is_tax_invoice = any(_local(el.tag) == "TaxInvoice" for el in root.iter()) or (
+        _local(root.tag) == "TaxInvoice"
+    )
+
+    if is_tax_invoice:
+        lines = ["[전자세금계산서]"]
+        # 당사자 블록(공급자/공급받는자)을 순서대로 라벨링한다.
+        party_labels = ["공급자", "공급받는자"]
+        parties = [el for el in root.iter() if _local(el.tag) == "Party"]
+        for idx, party in enumerate(parties):
+            label = party_labels[idx] if idx < len(party_labels) else f"당사자{idx + 1}"
+            fields = []
+            for el in party.iter():
+                key = _TAX_PARTY_FIELDS.get(_local(el.tag))
+                if key and el.text and el.text.strip():
+                    fields.append(f"{key} {el.text.strip()}")
+            if fields:
+                lines.append(f"{label}: " + ", ".join(fields))
+        # 금액·날짜 등 단일 필드.
+        for el in root.iter():
+            key = _TAX_INVOICE_FIELDS.get(_local(el.tag))
+            if key and el.text and el.text.strip():
+                lines.append(f"{key}: {el.text.strip()}")
+        # 품목명(있으면).
+        items = [
+            el.text.strip()
+            for el in root.iter()
+            if _local(el.tag) == "ItemName" and el.text and el.text.strip()
+        ]
+        if items:
+            lines.append("품목: " + ", ".join(items))
+        text = "\n".join(lines).strip()
+        # 라벨 헤더만 남고 실제 값이 하나도 없으면 일반 폴백으로 넘어간다.
+        if len(lines) > 1:
+            return text
+
+    # 일반 XML 폴백: 네임스페이스를 무시하고 모든 요소의 텍스트를 모은다.
+    parts = []
+    for el in root.iter():
+        if el.text and el.text.strip():
+            parts.append(el.text.strip())
+    return "\n".join(parts).strip()
+
+
 def extract_text(file_path: Path) -> str:
     """파일 확장자에 따라 적절한 추출 방식을 선택해 텍스트를 반환한다."""
     suffix = file_path.suffix.lower()
@@ -123,5 +264,13 @@ def extract_text(file_path: Path) -> str:
         return extract_hwp_text(file_path)
     if suffix in HWPX_EXTENSIONS:
         return extract_hwpx_text(file_path)
+    if suffix in XLSX_EXTENSIONS:
+        return extract_xlsx_text(file_path)
+    if suffix in DOCX_EXTENSIONS:
+        return extract_docx_text(file_path)
+    if suffix in MSG_EXTENSIONS:
+        return extract_msg_text(file_path)
+    if suffix in XML_EXTENSIONS:
+        return extract_xml_text(file_path)
 
     raise ValueError(f"지원하지 않는 파일 형식입니다: {suffix}")

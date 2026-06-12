@@ -121,8 +121,9 @@ Ordered roughly by value-to-effort. Each is independent.
   dropped as audio files → same classify/note path. Owner can dictate site notes.
 - **Sketch / drawing understanding (VLM).** A vision model (Qwen2-VL / LLaVA-class) to describe
   hand sketches or marked-up drawings into searchable text. Watch VRAM (coexist with Enscape).
-- **More formats.** `.xlsx` (estimates/내역서 — high value, lots of these), `.pptx`, `.msg`
-  (emails), `.dwg` (at least metadata). The inbox is full of these and they're currently skipped.
+- **More formats.** ✅ `.xlsx` (estimates/내역서), `.docx`, `.msg` (emails), `.xml` (전자세금계산서)
+  are now extracted and routed through the pipeline. Still future: `.pptx`, archive expansion
+  (`.zip`/`.alz`), `.dwg` metadata.
 
 ### Phase 8 — Smarter retrieval
 - **Hybrid search** (BM25 + semantic). Helps Korean proper nouns / lot numbers that embeddings
