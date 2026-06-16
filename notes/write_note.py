@@ -32,10 +32,20 @@ def _quarter(dt: datetime) -> str:
     return f"{dt.year}-Q{(dt.month - 1) // 3 + 1}"
 
 
-def _merge_tags(result: Classification) -> list[str]:
-    """category 를 첫 태그로 두고 모델이 준 태그를 합친다(공백 제거·중복 제거)."""
+# 파일명에 이 단어가 들어 있으면 분류 결과와 무관하게 '노트' 태그를 보장한다.
+# (진행 노트처럼 직접 만든 파일을 _inbox 에 넣을 때 파일명에 '노트'만 넣으면 됨.)
+NOTE_FILENAME_MARKER = "노트"
+
+
+def _merge_tags(result: Classification, source_name: str | None = None) -> list[str]:
+    """category 를 첫 태그로 두고 모델이 준 태그를 합친다(공백 제거·중복 제거).
+
+    source_name(원본 파일명)에 '노트'가 들어 있으면 '노트' 태그를 항상 추가한다."""
     merged: list[str] = []
-    for raw in [result.category, *result.tags]:
+    raw_tags = [result.category, *result.tags]
+    if source_name and NOTE_FILENAME_MARKER in source_name:
+        raw_tags.append(NOTE_FILENAME_MARKER)
+    for raw in raw_tags:
         tag = re.sub(r"\s+", "-", str(raw).strip()).strip("-#")
         if tag and tag not in merged:
             merged.append(tag)
@@ -68,7 +78,7 @@ def _build_markdown(
     created: datetime,
     origin_email: str | None = None,
 ) -> str:
-    tags = _merge_tags(result)
+    tags = _merge_tags(result, source_name)
     # 업무 노트에만 project 필드를 넣는다(개인 노트엔 의미 없음).
     project_line = (
         f"project: {DEFAULT_WORK_PROJECT}\n" if result.domain == _WORK_DOMAIN else ""

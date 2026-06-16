@@ -50,6 +50,19 @@ def test_write_note_omits_origin_email_when_absent(tmp_path):
     assert "source_email:" not in path.read_text(encoding="utf-8")
 
 
+def test_write_note_adds_note_tag_from_filename(tmp_path):
+    # 파일명에 '노트'가 있으면 분류 category 와 무관하게 '노트' 태그가 붙는다.
+    path = write_note(RESULT, "2026-06-17 노트 작업진행.txt", "원문.", tmp_path)
+    text = path.read_text(encoding="utf-8")
+    assert "- 노트" in text
+
+
+def test_write_note_no_note_tag_without_marker(tmp_path):
+    # 파일명에 '노트'가 없으면 추가되지 않는다.
+    path = write_note(RESULT, "meeting.pdf", "원문.", tmp_path)
+    assert "- 노트" not in path.read_text(encoding="utf-8")
+
+
 def test_write_note_personal_goes_to_20(tmp_path):
     result = Classification(domain="개인", category="메모", title="생각", summary="s")
     path = write_note(result, "x.txt", "c", tmp_path)
