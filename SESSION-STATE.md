@@ -46,12 +46,13 @@ move-timeout fix keeps the pipeline alive meanwhile.
   `.md` and a `.db` junk file. The `.xlsx/.docx/.msg/.xml` are gone from the inbox.
 - Vault `10_Professional`: **198** work-notes (was 162). New exaone-classified notes exist
   (e.g. `2026-04-01 용역계약서 - 골든구스 코리아 … (최종)`).
-- **OPEN ITEM — `.msg` attachments NOT captured:** `grep "source_email:"` across the vault = **0**.
-  The attachment-explosion code never actually ran on real data (the `.msg` were iCloud-locked when
-  the new-code drains ran, and the watcher's startup `run_once` reported `0/33 성공`). So the contract
-  scans / 내역서 that lived *inside* the emails are still missing as notes. **Verify next session:**
-  are the `.msg` in `_archive`? If processed body-only, re-feed them (move back to `_inbox`, clear
-  their hashes) so attachments explode; if never processed, drain them.
+- **OPEN ITEM — `.msg` attachments NOT captured:** `grep "source_email:"` across the vault = **0**,
+  yet all **13 `.msg` are in `_archive`** (0 in inbox). So they were processed **body-only** (by old
+  code / while iCloud-locked) and their attachments (contract scans, 내역서 that lived *inside* the
+  emails) are still missing. **Recovery:** move the 13 `_archive/*.msg` back to `_inbox`, remove their
+  entries from `processed_hashes.json` (so they aren't skipped as 중복), then `run_once` — the new
+  code (commit 88bae85) explodes each attachment into its own note with `source_email` provenance.
+  Confirm success by `grep -rl source_email …/10_Professional | wc -l` > 0.
 
 ## Auto-retry loop (scheduled 2026-06-13, may have lapsed over the 3-day gap)
 Driver: `_retry_cycle.py` (+ `_autoretry_state.json`) — runs one drain cycle (lowers MOVE_TIMEOUT,
