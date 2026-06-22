@@ -6,7 +6,6 @@ from classifier import classify as classify_module
 from classifier.classify import (
     KIND_PROJECT,
     KIND_REFERENCE,
-    Classification,
     classify,
     compose_title,
 )

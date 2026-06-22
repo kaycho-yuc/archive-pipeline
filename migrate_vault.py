@@ -10,7 +10,6 @@
 import argparse
 import os
 import re
-import shutil
 import zipfile
 from datetime import datetime
 from pathlib import Path
