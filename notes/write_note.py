@@ -2,7 +2,7 @@
 
 import os
 import re
-from datetime import datetime
+from datetime import date as _Date, datetime
 from pathlib import Path
 
 from classifier.classify import Classification
@@ -114,6 +114,79 @@ source: {source_name}
 """
 
 
+_DATE_PREFIX = re.compile(r"^(\d{4}-\d{2}-\d{2})")
+_DAILY_KEYWORDS = ("운동 일지", "운동일지")
+
+
+def _stem_date(stem: str) -> _Date | None:
+    m = _DATE_PREFIX.match(stem)
+    if m:
+        try:
+            return _Date.fromisoformat(m.group(1))
+        except ValueError:
+            pass
+    return None
+
+
+def _link_daily_sessions(note_path: Path, doc_date: str, vault_path: Path) -> None:
+    """주간 운동리뷰 노트 하단에 해당 기간의 회차별 일지 위키링크를 추가한다.
+
+    이전 리뷰 날짜 < 세션 날짜 < 현재 리뷰 날짜 범위의 일지만 연결한다.
+    같은 날 세션은 다음 리뷰로 미뤄 이중 링크를 방지한다."""
+    try:
+        review_date = _Date.fromisoformat(doc_date) if doc_date else None
+    except ValueError:
+        review_date = None
+    if review_date is None:
+        review_date = _stem_date(note_path.stem)
+    if review_date is None:
+        return
+
+    # 이전 운동리뷰 날짜들을 수집한다.
+    prev_dates: list[_Date] = []
+    for md in vault_path.rglob("*.md"):
+        if md == note_path:
+            continue
+        d = _stem_date(md.stem)
+        if d is None or d >= review_date:
+            continue
+        try:
+            if "category: 운동리뷰" in md.read_text(encoding="utf-8", errors="ignore"):
+                prev_dates.append(d)
+        except Exception:
+            pass
+    prev_date = max(prev_dates) if prev_dates else _Date(2000, 1, 1)
+
+    # 범위 안의 일별 운동 일지를 찾는다.
+    sessions: list[tuple[_Date, str]] = []
+    for md in vault_path.rglob("*.md"):
+        if md == note_path:
+            continue
+        stem = md.stem
+        if not any(kw in stem for kw in _DAILY_KEYWORDS):
+            continue
+        d = _stem_date(stem)
+        if d is None or not (prev_date <= d < review_date):
+            continue
+        try:
+            if "category: 운동리뷰" in md.read_text(encoding="utf-8", errors="ignore"):
+                continue  # 주간 리뷰 노트는 제외
+        except Exception:
+            pass
+        sessions.append((d, stem))
+
+    if not sessions:
+        return
+
+    sessions.sort()
+    links = "\n".join(f"- [[{stem}]]" for _, stem in sessions)
+    section = f"\n## 관련 일지\n\n{links}\n"
+
+    content = note_path.read_text(encoding="utf-8")
+    if "## 관련 일지" not in content:
+        note_path.write_text(content.rstrip() + section, encoding="utf-8")
+
+
 def write_note(
     result: Classification,
     source_name: str,
@@ -136,4 +209,6 @@ def write_note(
         _build_markdown(result, source_name, content, created, origin_email),
         encoding="utf-8",
     )
+    if result.category == "운동리뷰":
+        _link_daily_sessions(note_path, result.doc_date, vault_path)
     return note_path
