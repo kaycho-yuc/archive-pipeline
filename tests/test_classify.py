@@ -46,6 +46,27 @@ def test_classify_extracts_fields_and_composes_title(monkeypatch):
     assert result.tags == ["근생", "리모델링"]
 
 
+def test_classify_filename_forces_category_override(monkeypatch):
+    # '주간운동리뷰' 파일은 모델이 다른 유형을 줘도 category=운동리뷰 로 강제된다.
+    payload = {"domain": "개인", "category": "보고서", "doc_date": "2026-06-01"}
+    monkeypatch.setattr(classify_module, "_call_ollama", _fake_response(payload))
+
+    result = classify("내용", source_name="2026-06-01_주간운동리뷰.md")
+
+    assert result.category == "운동리뷰"  # 모델의 '보고서' 대신 강제
+    assert result.title == "2026-06-01 운동리뷰"  # 제목 유형 슬롯도 운동리뷰
+
+
+def test_classify_no_override_without_marker(monkeypatch):
+    # 표지 단어가 없으면 모델 category 를 그대로 쓴다.
+    payload = {"domain": "개인", "category": "보고서"}
+    monkeypatch.setattr(classify_module, "_call_ollama", _fake_response(payload))
+
+    result = classify("내용", source_name="2026-06-18 13회차 운동일지.md")
+
+    assert result.category == "보고서"
+
+
 def test_classify_drops_malformed_doc_date(monkeypatch):
     for bad in ("작성일 미상", "2026-02-32", "2026-13-01"):  # 형식오류 + 없는 날짜
         payload = {"domain": "업무", "category": "견적서", "doc_date": bad}

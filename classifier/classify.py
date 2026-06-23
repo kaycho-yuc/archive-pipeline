@@ -174,7 +174,26 @@ def _valid_doc_date(value: str) -> str:
     return ""
 
 
-def _parse_response(raw: str) -> Classification:
+# 파일명에 특정 단어가 있으면 모델 분류와 무관하게 category 를 강제한다.
+# 통제 어휘(DOC_TYPES) 밖의 사용자 정의 유형을 일관되게 붙이기 위한 결정적 규칙.
+# (예: '주간운동리뷰' 파일은 항상 category=운동리뷰 → 제목·태그도 운동리뷰로 통일.)
+_FILENAME_CATEGORY_OVERRIDES = {
+    "주간운동리뷰": "운동리뷰",
+}
+
+
+def _category_override(source_name: str) -> str | None:
+    """원본 파일명에 등록된 표지 단어가 있으면 강제할 category 를 돌려준다.
+
+    공백·밑줄을 무시하고 매칭한다('주간 운동 리뷰'·'주간_운동_리뷰'도 인식)."""
+    key = re.sub(r"[\s_]+", "", source_name)
+    for marker, category in _FILENAME_CATEGORY_OVERRIDES.items():
+        if marker in key:
+            return category
+    return None
+
+
+def _parse_response(raw: str, source_name: str = "") -> Classification:
     data = json.loads(raw)
     if not isinstance(data, dict):
         raise ValueError("응답이 JSON 객체가 아닙니다.")
@@ -188,7 +207,10 @@ def _parse_response(raw: str) -> Classification:
     # 안전하게 프로젝트자료로 둬, 실데이터가 봇에서 누락되지 않게 한다.
     kind = KIND_REFERENCE if str(data.get("kind", "")).strip() == KIND_REFERENCE else KIND_PROJECT
 
-    category = str(data.get("category") or "미분류").strip() or "미분류"
+    # 파일명 기반 강제 유형이 있으면 모델 결과보다 우선한다.
+    category = _category_override(source_name) or (
+        str(data.get("category") or "미분류").strip() or "미분류"
+    )
     counterparty = str(data.get("counterparty") or "").strip()
     status = str(data.get("status") or "").strip()
     detail = str(data.get("detail") or "").strip()
@@ -222,7 +244,7 @@ def classify(text: str, source_name: str = "", model: str = DEFAULT_MODEL) -> Cl
     for temperature in RETRY_TEMPERATURES:
         try:
             raw = _call_ollama(messages, model, temperature)
-            return _parse_response(raw)
+            return _parse_response(raw, source_name)
         except (json.JSONDecodeError, ValueError, KeyError) as error:
             last_error = error
 
