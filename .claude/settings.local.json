@@ -1,7 +1,8 @@
 {
   "permissions": {
     "allow": [
-      "PowerShell(Test-Path *)"
+      "PowerShell(Test-Path *)",
+      "Bash(uv run *)"
     ]
   }
 }
