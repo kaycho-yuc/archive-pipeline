@@ -14,7 +14,12 @@ from dotenv import load_dotenv
 
 import notifier
 from classifier.classify import KIND_REFERENCE, classify
-from extractors.extract import MSG_EXTENSIONS, extract_text, msg_attachments
+from extractors.extract import (
+    MSG_EXTENSIONS,
+    SUPPORTED_EXTENSIONS,
+    extract_text,
+    msg_attachments,
+)
 from notes.write_note import write_note
 
 load_dotenv()
@@ -206,6 +211,106 @@ def _move_to(file_path: Path, dest_dir: Path, timeout: float = MOVE_TIMEOUT) -> 
     return dest
 
 
+# 미지원 형식(추출기 없는 dwg·pptx·zip·alz 등) 파일을 누적 기록하는 볼트 노트.
+# 새 미지원 파일이 들어올 때마다 표에 한 줄씩 추가되고, 파일은 _failed 로 격리된다.
+UNSUPPORTED_NOTE_NAME = os.getenv("UNSUPPORTED_NOTE_NAME", "미지원_파일_목록.md")
+
+_UNSUPPORTED_NOTE_HEADER = """\
+---
+title: 미지원 파일 목록 (자동 처리 불가 파일)
+category: 시스템
+status: 유지관리
+tags:
+  - 시스템/미지원파일
+  - 유지관리
+created: {today}
+updated: {today}
+---
+
+# 미지원 파일 목록
+
+아카이브 파이프라인이 **자동 처리하지 못하는 형식**의 파일을 기록하는 목록입니다.
+지원 형식(pdf · docx · xlsx/xls · hwp/hwpx · md · msg · xml · txt · 이미지)에 없는 파일은
+인박스(`_inbox`)에서 처리되지 않으므로, 여기에 기록한 뒤 `_failed` 폴더로 옮깁니다.
+
+- **압축파일(zip·alz)**: 풀어서 안의 pdf·docx 등을 인박스에 넣으면 처리됩니다.
+- **도면(dwg)·파워포인트(pptx)**: 현재 추출기가 없습니다.
+- 이 노트는 미지원 파일이 새로 나올 때마다 **자동으로 누적**됩니다.
+
+| 기록일 | 파일명 | 확장자 | 생성일 | 최근 수정일 | 크기(MB) | 인박스 내 원래 위치 | 이동 위치 |
+|--------|--------|--------|--------|-------------|----------|---------------------|-----------|
+"""
+
+
+def _unsupported_note_row(file_path: Path, inbox_dir: Path) -> str:
+    """미지원 파일 한 줄을 노트 표 형식(생성일·수정일 포함)으로 만든다."""
+    st = file_path.stat()
+    created = datetime.fromtimestamp(st.st_ctime).strftime("%Y-%m-%d %H:%M")
+    modified = datetime.fromtimestamp(st.st_mtime).strftime("%Y-%m-%d %H:%M")
+    size_mb = round(st.st_size / (1024 * 1024), 1)
+    try:
+        rel = file_path.parent.relative_to(inbox_dir)
+        location = str(rel) if str(rel) != "." else "(루트)"
+    except ValueError:
+        location = str(file_path.parent)
+    today = datetime.now().strftime("%Y-%m-%d")
+    return (
+        f"| {today} | {file_path.name} | {file_path.suffix.lower()} | {created} | "
+        f"{modified} | {size_mb} | {location} | _failed |"
+    )
+
+
+def record_unsupported(
+    file_path: Path, vault_path: Path = VAULT_PATH, inbox_dir: Path = INBOX_DIR
+) -> Path:
+    """미지원 파일을 볼트 노트(누적 표)에 한 줄 추가한다. 노트가 없으면 만든다.
+
+    같은 파일명이 이미 표에 있으면 다시 적지 않는다(이동 실패로 재시도될 때 중복 방지)."""
+    note = vault_path / UNSUPPORTED_NOTE_NAME
+    note.parent.mkdir(parents=True, exist_ok=True)
+    today = datetime.now().strftime("%Y-%m-%d")
+    content = (
+        note.read_text(encoding="utf-8")
+        if note.exists()
+        else _UNSUPPORTED_NOTE_HEADER.format(today=today)
+    )
+    if f"| {file_path.name} |" in content:
+        return note  # 이미 기록됨
+    if not content.endswith("\n"):
+        content += "\n"
+    content += _unsupported_note_row(file_path, inbox_dir) + "\n"
+    note.write_text(content, encoding="utf-8")
+    return note
+
+
+def quarantine_unsupported(
+    file_path: Path,
+    vault_path: Path = VAULT_PATH,
+    failed_dir: Path = FAILED_DIR,
+    inbox_dir: Path = INBOX_DIR,
+) -> bool:
+    """미지원 형식 파일을 노트에 기록한 뒤 _failed 로 격리한다. 이동 성공 시 True.
+
+    이동이 iCloud 동기화로 멈추면(타임아웃) 이번엔 보류하고 다음 스윕에서 재시도한다."""
+    name = file_path.name
+    if not file_path.exists():
+        return False  # 다른 경로(감시기/이전 스윕)에서 이미 처리됨
+    try:
+        record_unsupported(file_path, vault_path, inbox_dir)
+        _move_to(file_path, failed_dir)
+        logger.info("미지원 형식 기록·격리: %s", name)
+        _log_result(name, "미지원(격리)", "미지원 형식 — 목록 기록 후 _failed 이동")
+        return True
+    except TimeoutError as error:
+        logger.warning("미지원 격리 이동 지연으로 보류(다음 스윕 재시도): %s — %s", name, error)
+        _log_result(name, "보류(이동지연)", str(error))
+        return False
+    except Exception as error:  # noqa: BLE001 — 한 파일 실패가 스윕 전체를 막지 않게 한다
+        logger.exception("미지원 격리 실패: %s", name)
+        _log_result(name, "미지원 격리 실패", str(error))
+        return False
+
+
 def _explode_msg_attachments(
     msg_path: Path,
     origin_email: str,
@@ -316,3 +421,38 @@ def process_file(
         _log_result(name, "실패", str(error))
         notifier.notify(f"⚠️ 처리 실패: {name}\n사유: {error}\n→ _failed 로 격리됨")
         return None
+
+
+def sweep_inbox(
+    vault_path: Path = VAULT_PATH,
+    archive_dir: Path = ARCHIVE_DIR,
+    failed_dir: Path = FAILED_DIR,
+    inbox_dir: Path = INBOX_DIR,
+) -> tuple[int, int, int]:
+    """_inbox 전체를 한 번 훑는다: 지원 형식은 처리, 미지원 형식은 기록·격리.
+
+    시작 시(backlog)와 감시 중 주기적으로 호출돼, iCloud 동기화로 감시기가 놓친
+    파일까지 빠짐없이 처리하고 미지원 파일을 쌓이지 않게 정리한다.
+    (처리 성공 수, 지원 형식 수, 미지원 형식 수)를 돌려준다."""
+    inbox_dir.mkdir(parents=True, exist_ok=True)
+    entries = [
+        p
+        for p in sorted(inbox_dir.rglob("*"))
+        if p.is_file() and p.name not in _JUNK_FILES
+    ]
+    supported = [p for p in entries if p.suffix.lower() in SUPPORTED_EXTENSIONS]
+    unsupported = [p for p in entries if p.suffix.lower() not in SUPPORTED_EXTENSIONS]
+
+    processed = 0
+    for path in supported:
+        if process_file(
+            path, vault_path=vault_path, archive_dir=archive_dir, failed_dir=failed_dir
+        ):
+            processed += 1
+    for path in unsupported:
+        quarantine_unsupported(
+            path, vault_path=vault_path, failed_dir=failed_dir, inbox_dir=inbox_dir
+        )
+
+    prune_empty_dirs(inbox_dir)
+    return processed, len(supported), len(unsupported)

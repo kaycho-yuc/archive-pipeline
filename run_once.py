@@ -1,15 +1,11 @@
-"""_inbox 안의 모든 파일을 한 번에 처리한다 (맥북 수동 실행용)."""
+"""_inbox 안의 모든 파일을 한 번에 처리한다 (맥북 수동 실행·시작 backlog용).
+
+지원 형식은 처리하고, 미지원 형식(dwg·pptx·zip·alz 등)은 볼트 노트에 기록한 뒤
+_failed 로 격리한다 — 실제 동작은 pipeline.sweep_inbox 에 모여 있다."""
 
 import logging
 
-from extractors.extract import SUPPORTED_EXTENSIONS
-from pipeline import (
-    ARCHIVE_DIR,
-    INBOX_DIR,
-    VAULT_PATH,
-    process_file,
-    prune_empty_dirs,
-)
+from pipeline import INBOX_DIR, sweep_inbox
 
 logging.basicConfig(
     level=logging.INFO,
@@ -19,24 +15,16 @@ logger = logging.getLogger("archive_pipeline")
 
 
 def main():
-    INBOX_DIR.mkdir(parents=True, exist_ok=True)
-    files = [
-        p
-        for p in sorted(INBOX_DIR.rglob("*"))
-        if p.is_file() and p.suffix.lower() in SUPPORTED_EXTENSIONS
-    ]
-
-    if not files:
+    processed, supported, unsupported = sweep_inbox()
+    if supported == 0 and unsupported == 0:
         logger.info("처리할 파일이 없습니다: %s", INBOX_DIR.resolve())
         return
-
-    logger.info("%d개 파일 처리 시작", len(files))
-    processed = 0
-    for path in files:
-        if process_file(path, vault_path=VAULT_PATH, archive_dir=ARCHIVE_DIR):
-            processed += 1
-    prune_empty_dirs(INBOX_DIR)
-    logger.info("완료: %d/%d 성공", processed, len(files))
+    logger.info(
+        "완료: 지원 %d/%d 성공, 미지원 %d개 기록·격리",
+        processed,
+        supported,
+        unsupported,
+    )
 
 
 if __name__ == "__main__":

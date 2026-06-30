@@ -184,6 +184,82 @@ def test_process_file_quarantines_reference(tmp_path, monkeypatch):
     assert not vault.exists()  # 노트(볼트)는 생성되지 않음
 
 
+def test_record_unsupported_creates_and_appends_note(tmp_path):
+    # 미지원 파일을 노트에 기록하면 표가 생기고, 파일명·확장자·생성/수정일·위치가 들어간다.
+    inbox = tmp_path / "inbox"
+    (inbox / "sub").mkdir(parents=True)
+    vault = tmp_path / "vault"
+    drawing = inbox / "sub" / "도면.dwg"
+    drawing.write_bytes(b"DWG")
+
+    note = pipeline.record_unsupported(drawing, vault_path=vault, inbox_dir=inbox)
+
+    assert note.name == "미지원_파일_목록.md"
+    text = note.read_text(encoding="utf-8")
+    assert "| 도면.dwg |" in text
+    assert "| .dwg |" in text
+    assert "| sub |" in text  # 인박스 내 원래 위치
+    assert "_failed |" in text
+
+    # 두 번째 파일은 같은 노트에 줄이 추가되고, 같은 파일은 중복 기록되지 않는다.
+    archive = inbox / "묶음.zip"
+    archive.write_bytes(b"ZIP")
+    pipeline.record_unsupported(archive, vault_path=vault, inbox_dir=inbox)
+    pipeline.record_unsupported(drawing, vault_path=vault, inbox_dir=inbox)  # 중복 시도
+    text = note.read_text(encoding="utf-8")
+    assert text.count("| 도면.dwg |") == 1
+    assert "| 묶음.zip |" in text
+
+
+def test_quarantine_unsupported_records_then_moves(tmp_path):
+    inbox = tmp_path / "inbox"
+    inbox.mkdir()
+    vault = tmp_path / "vault"
+    failed = tmp_path / "failed"
+    archive = inbox / "계약서류.alz"
+    archive.write_bytes(b"ALZ")
+
+    ok = pipeline.quarantine_unsupported(
+        archive, vault_path=vault, failed_dir=failed, inbox_dir=inbox
+    )
+
+    assert ok is True
+    assert not archive.exists()  # _inbox 에서 빠짐
+    assert (failed / "계약서류.alz").exists()  # _failed 로 격리
+    assert "| 계약서류.alz |" in (vault / "미지원_파일_목록.md").read_text(
+        encoding="utf-8"
+    )
+
+
+def test_sweep_inbox_processes_supported_and_quarantines_unsupported(
+    tmp_path, monkeypatch
+):
+    # 한 번의 스윕으로 지원 파일은 노트가 되고(아카이브로 이동), 미지원 파일은 _failed 로 격리.
+    inbox = tmp_path / "inbox"
+    inbox.mkdir()
+    vault = tmp_path / "vault"
+    archive = tmp_path / "archive"
+    failed = tmp_path / "failed"
+
+    (inbox / "memo.txt").write_text("회의 내용", encoding="utf-8")
+    (inbox / "도면.dwg").write_bytes(b"DWG")
+
+    monkeypatch.setattr(
+        pipeline,
+        "classify",
+        lambda text, source_name="": Classification("업무", "회의록", "메모", "요약."),
+    )
+
+    processed, supported, unsupported = pipeline.sweep_inbox(
+        vault_path=vault, archive_dir=archive, failed_dir=failed, inbox_dir=inbox
+    )
+
+    assert (processed, supported, unsupported) == (1, 1, 1)
+    assert (archive / "memo.txt").exists()  # 지원 파일 처리·아카이브
+    assert (failed / "도면.dwg").exists()  # 미지원 파일 격리
+    assert "| 도면.dwg |" in (vault / "미지원_파일_목록.md").read_text(encoding="utf-8")
+
+
 def test_process_file_quarantines_on_classify_error(tmp_path, monkeypatch):
     inbox = tmp_path / "inbox"
     inbox.mkdir()
