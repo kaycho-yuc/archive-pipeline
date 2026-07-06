@@ -6,7 +6,12 @@ Open WebUI REST API 사용:
   3) 파일을 지식베이스에 연결        POST /api/v1/knowledge/{id}/file/add
 
 이미 같은 이름의 지식베이스가 있으면 재사용하고, 이미 올라간 파일명은 건너뛴다
-(중복 임베딩 방지). 임베딩은 서버가 nomic-embed-text 로 자동 수행한다.
+(중복 임베딩 방지).
+
+임베딩 주의: 이 스크립트는 임베딩 모델을 지정하지 않는다. Open WebUI 서버가 자체
+설정(RAG_EMBEDDING_MODEL)대로 임베딩하며, 현재 기본값은 all-MiniLM-L6-v2(영어 전용,
+384차원)이다 — 한국어 검색 품질이 낮은 원인. 볼트가 한국어이므로 bge-m3 등
+다국어 임베더로 교체하거나 로컬 RAG로 이전하는 것을 권장한다(플랜: Track 0/3).
 """
 
 import os

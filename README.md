@@ -19,7 +19,7 @@
 _inbox(iCloud) ──감시──► 중복검사(SHA-256) → 텍스트 추출 → LLM 분류·요약
                          → Obsidian 노트 작성(태그 + 업무는 project) → 원본 _archive 이동
                                             │
-                         볼트 ──► Open WebUI RAG(bge-m3) ──► 텔레그램 봇(한국어 질의)
+                         볼트 ──► Open WebUI RAG ──► 텔레그램 봇(한국어 질의)
 ```
 
 ## 구조
@@ -70,7 +70,7 @@ uv sync
 
 # Ollama (모델 미리 받기)
 ollama pull llama3.1        # 분류·요약
-ollama pull bge-m3          # 임베딩(한국어)
+ollama pull bge-m3          # 다국어 임베딩(한국어). 아래 '임베딩 주의' 참고
 ollama pull exaone3.5:7.8b  # 봇 답변(한국어 특화)
 
 # _inbox 일괄 처리(수동)
@@ -106,7 +106,12 @@ LLM·OCR·텔레그램 호출은 외부 의존성이라 테스트에서 모킹/�
 
 ## 기술 스택
 
-로컬 전용: Ollama(분류 llama3.1 / 임베딩 bge-m3 / 답변 EXAONE 3.5) · Open WebUI(Docker, localhost 전용) ·
+로컬 전용: Ollama(분류 llama3.1 / 답변 EXAONE 3.5) · Open WebUI(Docker, localhost 전용, RAG 임베딩·검색) ·
 Tesseract + PyMuPDF(스캔 OCR) · pyhwp(한글) · watchdog · Telegram Bot API · Obsidian.
 환경: Windows 11 / Python 3.13 / RTX 4080.
+
+> **⚠️ 임베딩 주의:** RAG 임베딩은 Open WebUI 서버가 자체 설정(`RAG_EMBEDDING_MODEL`)으로
+> 수행한다. 현재 기본값은 **all-MiniLM-L6-v2(영어 전용, 384차원)** 이라 한국어 검색 품질이
+> 낮다. 관리자 설정에서 **bge-m3** 등 다국어 임베더로 바꾸거나 로컬 RAG(LanceDB+bge-m3)로
+> 이전할 것을 권장한다.
 ```
