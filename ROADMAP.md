@@ -134,13 +134,26 @@ Ordered roughly by value-to-effort. Each is independent.
 - **More formats.** ✅ `.xlsx` (estimates/내역서), `.docx`, `.msg` (emails), `.xml` (전자세금계산서)
   are now extracted and routed through the pipeline. Still future: `.pptx`, archive expansion
   (`.zip`/`.alz`), `.dwg` metadata.
-- **Extraction quality upgrade (Docling / PaddleOCR).** Tesseract on Korean scans produces
-  garbled text — observed character-doubling on the 685-317 대수선 필증 scan
-  (`발발급급확확인인번번호호`), and loses table/layout structure. Plan: **Docling** for native/
-  complex PDF + office docs (structure→markdown, tables preserved), **PaddleOCR** (CJK-strong)
-  for Korean scans; keep tuned Tesseract as fallback and A/B before adopting. Heavy deps (torch)
-  → run **on-demand only**, add to `pause_ai`, mind the 16 GB VRAM shared with Revit/Enscape.
-  Re-processing already-filed notes needs the archived originals in `_archive`.
+- **Extraction quality upgrade (Docling / PaddleOCR).** ⚠️ EVALUATED 2026-07-06 — **do not swap
+  scan OCR now.** A/B on the 685-317 대수선 필증 scan (isolated venvs, production deps untouched):
+  - *Tesseract (current):* doubles chars in the header (`발발급급확확인인번번호호`) BUT reads the
+    critical lot numbers correctly (685-317, 성수동1가, 2018.11.29).
+  - *EasyOCR (ko):* fixes the header doubling and runs on Py3.13/GPU, BUT **misreads lot-number
+    digits** (685-317→685-**377**, 성수동1가→성수동**7**가) — dangerous, since project detection and
+    the whole construction domain hinge on those exact numbers. Net: not a safe upgrade.
+    Also multi-GB torch on a VRAM-constrained shared machine.
+  - *PaddleOCR (CJK-strong, the best candidate on paper):* installs on Py3.13 but the CPU
+    paddlepaddle 3.x build hits an oneDNN/PIR inference bug here (`ConvertPirAttribute2Runtime
+    Attribute`) — not runnable without a different paddle build.
+  - *Docling (full pipeline):* transformers 4.x/5.x lazy-import filesystem scan crashes in this
+    env; its real value is **native-PDF table structure**, not scan OCR, so it's the wrong tool
+    for the garbled *scans* anyway.
+  - **Conclusion / next:** the Track 3 metadata-stamping already neutralizes most OCR-noise impact
+    on RAG (clean frontmatter carries date/project/category), so an OCR swap is low-payoff + risky
+    right now — keep Tesseract. The genuinely valuable, untested axis is **Docling for NATIVE
+    (non-scanned) PDFs with real tables** (견적서/내역서 → markdown tables); revisit that in a
+    clean env (pin `transformers`, install outside a temp dir), on-demand only, and never route
+    Korean *scans* through a digit-misreading engine. Re-processing filed notes needs `_archive`.
 
 ### Phase 8 — Smarter retrieval (local RAG follow-ups from the 2026-07-06 migration)
 > RAG is now in-process (`rag_local.py`: LanceDB + bge-m3). These items build on it.
