@@ -28,7 +28,8 @@ PHASE 4 │ Conversational access   Telegram bot (RAG, EXAONE 3.5), resource mon
         ├─────────────────────────────────────────────────────────────────────┤
 PHASE 5 │ Project awareness       project: field on work notes (single project today)  ✅ DONE
         ├─────────────────────────────────────────────────────────────────────┤
-PHASE 6 │ Multi-project           project DETECTION when a 2nd project appears         ◻ NEXT
+PHASE 6 │ Multi-project           project DETECTION done (identifier-based); config a
+        │                         2nd project + project-scoped RAG remain              ◧ PARTIAL
         ├─────────────────────────────────────────────────────────────────────┤
 PHASE 7 │ Richer inputs           voice (Whisper), sketch/vision (VLM), more formats   ◻ FUTURE
         ├─────────────────────────────────────────────────────────────────────┤
@@ -112,10 +113,16 @@ original is archived locally; and the owner can ask questions in Korean from the
 Ordered roughly by value-to-effort. Each is independent.
 
 ### Phase 6 — Multi-project (the likely next need)
-- **Project detection.** When a 2nd project appears, infer `project` per note instead of the
-  fixed default. Approach: keyword/address match first (e.g. "성수동", lot numbers like
-  685-317), LLM inference as fallback. Add `project` to the `Classification` schema, keep a
-  configurable list of known projects. Backfill is already solved by `migrate_add_project.py`'s pattern.
+- **Project detection.** ✅ DONE (2026-07-06). `classify.detect_project()` assigns `project` per
+  note from deterministic identifiers (lot numbers/addresses); `Classification.project` field;
+  `write_note` uses it, falling back to `DEFAULT_WORK_PROJECT`. Registry = `DEFAULT_WORK_PROJECT`
+  + `PROJECT_IDENTIFIERS` plus optional `WORK_PROJECTS` JSON in `.env`. **When a 2nd project
+  arrives:** add it to `WORK_PROJECTS`, then run `migrate_add_project.py` (dry-run → `--execute`)
+  to re-file existing notes by their `source` filename. (LLM inference was deliberately NOT used —
+  lot numbers are cleaner and the decision log warns LLMs name projects inconsistently.)
+- **Project-scoped RAG.** ◻ Remaining. Filter `rag_local` search by the `project` column (a
+  `/project 성수동` command, or detect project from the question) so the bot answers within one
+  project. LanceDB supports a `where` filter on the query.
 - **Project-scoped RAG.** Let the Telegram bot filter retrieval by project (e.g. a `/project 성수동`
   command, or detect project from the question). Open WebUI supports metadata filtering.
 
