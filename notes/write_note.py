@@ -14,8 +14,8 @@ _INVALID_CHARS = re.compile(r'[\\/:*?"<>|]')
 _DOMAIN_FOLDERS = {"업무": "10_Professional", "개인": "20_Personal"}
 _FALLBACK_FOLDER = "90_System"
 
-# 업무 노트에는 어떤 프로젝트인지 frontmatter 에 기록한다. 현재는 단일 프로젝트라
-# 기본값을 쓰고, 프로젝트가 늘면 분류기에서 추론하도록 확장한다(.env 로 변경 가능).
+# 업무 노트에는 어떤 프로젝트인지 frontmatter 에 기록한다. 분류기가 파일명·본문의
+# 지번 등으로 프로젝트를 판별하며(classify.detect_project), 못 찾으면 기본값으로 폴백한다.
 _WORK_DOMAIN = "업무"
 DEFAULT_WORK_PROJECT = os.getenv("DEFAULT_WORK_PROJECT", "성수동 리모델링")
 
@@ -79,9 +79,11 @@ def _build_markdown(
     origin_email: str | None = None,
 ) -> str:
     tags = _merge_tags(result, source_name)
-    # 업무 노트에만 project 필드를 넣는다(개인 노트엔 의미 없음).
+    # 업무 노트에만 project 필드를 넣는다(개인 노트엔 의미 없음). 분류기가 판별한 프로젝트를
+    # 쓰고, 못 찾았으면(빈 값) 기본 프로젝트로 폴백한다.
+    project = getattr(result, "project", "") or DEFAULT_WORK_PROJECT
     project_line = (
-        f"project: {DEFAULT_WORK_PROJECT}\n" if result.domain == _WORK_DOMAIN else ""
+        f"project: {project}\n" if result.domain == _WORK_DOMAIN else ""
     )
     # 값이 있을 때만 넣는 구조화 필드(기계 파싱용). 비면 생략해 frontmatter 를 깔끔히.
     extra = "".join(

@@ -25,6 +25,47 @@ PROJECT_IDENTIFIERS = [
     if s.strip()
 ]
 
+
+def _load_project_registry() -> dict[str, list[str]]:
+    """프로젝트명 → 식별자 목록. 기본 프로젝트(.env) + 선택적 WORK_PROJECTS(JSON) 병합.
+
+    2번째 프로젝트가 생기면 .env 에 예: WORK_PROJECTS={"판교 오피스":["521-3","판교"]}
+    를 넣으면 된다. 형식이 잘못돼도 기본 레지스트리로 안전하게 떨어진다."""
+    registry: dict[str, list[str]] = {PROJECT_NAME: list(PROJECT_IDENTIFIERS)}
+    raw = os.getenv("WORK_PROJECTS", "").strip()
+    if raw:
+        try:
+            for name, ids in json.loads(raw).items():
+                name = str(name).strip()
+                if name:
+                    registry[name] = [str(i).strip() for i in ids if str(i).strip()]
+        except (json.JSONDecodeError, AttributeError, TypeError):
+            pass  # 형식 오류면 기본 레지스트리만 사용(파이프라인을 막지 않음)
+    return registry
+
+
+PROJECT_REGISTRY = _load_project_registry()
+
+
+def _norm_ident(s: str) -> str:
+    """식별자·건초더미를 공백/하이픈/밑줄 제거로 정규화('685-317'='685 317'='685_317')."""
+    return re.sub(r"[\s_\-]", "", s or "")
+
+
+def detect_project(source_name: str, text: str = "") -> str:
+    """파일명(우선)·본문 앞부분에서 프로젝트 식별자를 찾아 프로젝트명을 돌려준다.
+
+    지번(685-317 등)·주소 같은 결정적 식별자로 판별한다. LLM 추측보다 정확하고 안정적.
+    어느 프로젝트에도 안 걸리면 빈 문자열(호출부가 기본 프로젝트로 폴백)."""
+    hay_name = _norm_ident(source_name)
+    hay_text = _norm_ident(text[:MAX_INPUT_CHARS])
+    for name, ids in PROJECT_REGISTRY.items():
+        for ident in ids:
+            key = _norm_ident(ident)
+            if key and (key in hay_name or key in hay_text):
+                return name
+    return ""
+
 KIND_PROJECT = "프로젝트자료"
 KIND_REFERENCE = "참고자료"
 
@@ -102,6 +143,7 @@ class Classification:
     counterparty: str = ""
     doc_date: str = ""
     status: str = ""
+    project: str = ""
 
 
 def compose_title(category: str, counterparty: str, doc_date: str,
@@ -193,7 +235,7 @@ def _category_override(source_name: str) -> str | None:
     return None
 
 
-def _parse_response(raw: str, source_name: str = "") -> Classification:
+def _parse_response(raw: str, source_name: str = "", text: str = "") -> Classification:
     data = json.loads(raw)
     if not isinstance(data, dict):
         raise ValueError("응답이 JSON 객체가 아닙니다.")
@@ -217,6 +259,10 @@ def _parse_response(raw: str, source_name: str = "") -> Classification:
     # doc_date 는 형식뿐 아니라 '실제로 존재하는 날짜'인지까지 검증한다(2026-02-32 같은 값 차단).
     doc_date = _valid_doc_date(str(data.get("doc_date") or "").strip())
 
+    # project 는 LLM 추측이 아니라 파일명·본문의 결정적 식별자(지번 등)로 판별한다.
+    # 업무 문서에만 부여하고, 못 찾으면 빈 문자열(write_note 가 기본 프로젝트로 폴백).
+    project = detect_project(source_name, text) if domain == "업무" else ""
+
     return Classification(
         domain=domain,
         category=category,
@@ -227,6 +273,7 @@ def _parse_response(raw: str, source_name: str = "") -> Classification:
         counterparty=counterparty,
         doc_date=doc_date,
         status=status,
+        project=project,
     )
 
 
@@ -244,7 +291,7 @@ def classify(text: str, source_name: str = "", model: str = DEFAULT_MODEL) -> Cl
     for temperature in RETRY_TEMPERATURES:
         try:
             raw = _call_ollama(messages, model, temperature)
-            return _parse_response(raw, source_name)
+            return _parse_response(raw, source_name, text)
         except (json.JSONDecodeError, ValueError, KeyError) as error:
             last_error = error
 
