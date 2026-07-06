@@ -6,14 +6,24 @@
 
 import logging
 import os
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
 os.chdir(Path(__file__).parent)
 
+# 회전 로그: 파일 하나가 커져도 5MB 에서 잘리고 백업 3개까지만 보관한다
+# (최대 약 20MB). 과거처럼 장애 루프가 로그로 디스크를 채우는 일을 막는다.
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)s %(message)s",
-    handlers=[logging.FileHandler("watch.log", encoding="utf-8")],
+    handlers=[
+        RotatingFileHandler(
+            "watch.log",
+            maxBytes=5 * 1024 * 1024,
+            backupCount=3,
+            encoding="utf-8",
+        )
+    ],
 )
 
 import monitor  # noqa: E402  (로깅 설정 후 임포트)

@@ -16,6 +16,7 @@ import logging
 import os
 import re
 import threading
+import time
 import urllib.parse
 import urllib.request
 
@@ -129,12 +130,18 @@ def main() -> None:
 
     logger.info("텔레그램 봇 시작 (허가 chat_id=%s, 모델=%s)", ALLOWED_CHAT_ID, MODEL)
     offset = 0
+    backoff = 0.0
     while True:
         try:
             updates = _tg_call("getUpdates", {"offset": offset, "timeout": 50}, timeout=60)
-        except Exception:
-            logger.exception("getUpdates 실패, 잠시 후 재시도")
+        except Exception as e:
+            # 네트워크·DNS 장애 시 urlopen 이 즉시 예외를 던져 루프가 폭주할 수 있으므로
+            # 지수 백오프로 재시도한다(최대 60초). 트레이스백 대신 한 줄만 남긴다.
+            backoff = min(backoff * 2 or 5.0, 60.0)
+            logger.warning("getUpdates 실패(%s), %.0f초 후 재시도", e, backoff)
+            time.sleep(backoff)
             continue
+        backoff = 0.0
 
         for upd in updates.get("result", []):
             offset = upd["update_id"] + 1
