@@ -37,6 +37,10 @@ API_KEY = os.getenv("OPENWEBUI_API_KEY", "")
 KB_ID = os.getenv("OPENWEBUI_KB_ID", "")
 MODEL = os.getenv("TELEGRAM_RAG_MODEL", "llama3.1:8b")
 
+# RAG 백엔드: "local"(LanceDB+bge-m3, 기본) 또는 "openwebui"(구 Docker 경로).
+# 로컬은 한국어 임베더(bge-m3)를 써서 검색 품질이 높고 Docker 가 필요 없다.
+RAG_BACKEND = os.getenv("RAG_BACKEND", "local").lower()
+
 _TG = f"https://api.telegram.org/bot{TOKEN}"
 
 # 추론형 모델(qwen 등)이 답 앞에 붙이는 <think>…</think> 사고 과정을 제거한다.
@@ -77,7 +81,27 @@ def send_typing(chat_id: str) -> None:
 
 
 def ask_knowledge_base(question: str) -> str:
-    """Open WebUI RAG 에 질문해 답(+출처)을 만들어 돌려준다."""
+    """설정된 RAG 백엔드로 질문에 답(+출처)을 만들어 돌려준다."""
+    if RAG_BACKEND == "local":
+        return _ask_local(question)
+    return _ask_openwebui(question)
+
+
+def _ask_local(question: str) -> str:
+    """로컬 RAG(LanceDB+bge-m3)로 검색·생성한다."""
+    import rag_local  # 지연 임포트: openwebui 백엔드만 쓸 때 lancedb 로딩 회피
+
+    answer, names = rag_local.answer(question, model=MODEL)
+    answer = _strip_thinking(answer)
+    if not answer:
+        return "답을 만들지 못했습니다. 질문을 바꿔 다시 시도해 주세요."
+    if names:
+        answer += "\n\n📎 참고한 노트:\n" + "\n".join(f"· {n}" for n in names[:10])
+    return answer
+
+
+def _ask_openwebui(question: str) -> str:
+    """Open WebUI RAG 에 질문해 답(+출처)을 만들어 돌려준다(구 경로)."""
     payload = json.dumps({
         "model": MODEL,
         "messages": [{"role": "user", "content": question}],
@@ -122,9 +146,16 @@ def handle_message(chat_id: str, text: str) -> None:
         send_message(chat_id, f"⚠️ 처리 중 오류가 났습니다: {e}")
 
 
+def _required_config() -> list[tuple[str, str]]:
+    """RAG 백엔드에 따라 필요한 설정 목록. 로컬은 Open WebUI 키가 필요 없다."""
+    req = [("TELEGRAM_BOT_TOKEN", TOKEN), ("TELEGRAM_CHAT_ID", ALLOWED_CHAT_ID)]
+    if RAG_BACKEND != "local":
+        req += [("OPENWEBUI_API_KEY", API_KEY), ("OPENWEBUI_KB_ID", KB_ID)]
+    return req
+
+
 def main() -> None:
-    missing = [n for n, v in (("TELEGRAM_BOT_TOKEN", TOKEN), ("TELEGRAM_CHAT_ID", ALLOWED_CHAT_ID),
-                              ("OPENWEBUI_API_KEY", API_KEY), ("OPENWEBUI_KB_ID", KB_ID)) if not v]
+    missing = [n for n, v in _required_config() if not v]
     if missing:
         raise SystemExit(f".env 에 다음 값이 필요합니다: {', '.join(missing)}")
 
@@ -161,7 +192,7 @@ def start_bot() -> threading.Thread | None:
 
     토큰·KB 등 설정이 없으면 조용히 건너뛴다(봇은 부가 기능이라 감시기를 막지 않는다).
     """
-    if not all((TOKEN, ALLOWED_CHAT_ID, API_KEY, KB_ID)):
+    if any(not v for _, v in _required_config()):
         logger.warning("텔레그램 봇 설정이 부족해 시작하지 않습니다(.env 확인).")
         return None
 

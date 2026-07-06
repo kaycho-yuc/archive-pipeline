@@ -15,3 +15,6 @@ processing_log.csv
 resource_log.csv
 processed_hashes.json
 vault_backup_*.zip
+
+# 로컬 RAG LanceDB 인덱스(재생성 가능, 커밋 제외)
+rag_db/
