@@ -44,7 +44,7 @@ VAULT = Path(
 # 노트가 들어 있는 구조화 폴더만 색인(템플릿·첨부 제외). ingest_vault.py 와 동일.
 INCLUDE_DIRS = ("10_Professional", "20_Personal", "90_System")
 
-CHUNK_CHARS = 1000  # 청크 목표 길이(문단 경계로 자름)
+CHUNK_CHARS = 700  # 청크 목표 길이(문단 경계로 자르되, 긴 문단은 하드 분할)
 
 # 시스템 OLLAMA_HOST 가 0.0.0.0(접속 불가)인 경우를 대비해 접속 주소를 명시한다.
 _host = os.getenv("OLLAMA_HOST", "127.0.0.1:11434")
@@ -105,10 +105,22 @@ def chunk_text(body: str, header: str) -> list[str]:
     헤더를 붙이면 '원문' 문단만으로는 어떤 문서인지·언제 문서인지 알 수 없는 청크도
     검색에 잘 걸리고, 날짜·분류 질문에 깨끗한 메타데이터로 답할 수 있다.
     """
-    paras = [p.strip() for p in re.split(r"\n\s*\n", body) if p.strip()]
+    # 문단 경계로 나누되, CHUNK_CHARS 보다 긴 문단은 하드 분할한다. 스캔 OCR 원문은 빈 줄이
+    # 없어 문단 하나가 수천 자로 거대해지곤 하는데, 그대로 두면 청크가 너무 커져 검색 임베딩이
+    # 흐려지고 생성 시 컨텍스트를 넘겨 잘린다.
+    pieces: list[str] = []
+    for para in re.split(r"\n\s*\n", body):
+        para = para.strip()
+        if not para:
+            continue
+        if len(para) <= CHUNK_CHARS:
+            pieces.append(para)
+        else:
+            for i in range(0, len(para), CHUNK_CHARS):
+                pieces.append(para[i : i + CHUNK_CHARS])
     chunks: list[str] = []
     buf = ""
-    for p in paras:
+    for p in pieces:
         if buf and len(buf) + len(p) + 2 > CHUNK_CHARS:
             chunks.append(buf)
             buf = p
@@ -247,11 +259,17 @@ def search(query: str, k: int = 5) -> list[dict]:
     return tbl.search(qv).limit(k).to_list()
 
 
-# 검색 청크 수. 제목이 겹치는 노트(같은 지번의 여러 문서)가 상위를 차지해 정작 답이 든
-# 노트가 밀려나는 일을 막기 위해 넉넉히 가져온다. 그만큼 문맥이 길어지므로 num_ctx 로
-# 컨텍스트 창을 넓혀 잘리지 않게 한다.
-DEFAULT_K = 8
-GEN_NUM_CTX = 8192
+# 검색 후보 청크 수. 제목이 겹치는 노트(같은 지번의 여러 문서)가 상위를 차지해 정작 답이
+# 든 청크가 밀려나는 일을 막기 위해 넉넉히 가져온 뒤, 아래 문맥 예산 안에서만 실제로 넣는다.
+DEFAULT_K = 12
+# exaone3.5:7.8b 의 기본 컨텍스트(4096). 이보다 크게(예: 8192) 요청하면 이 Ollama 빌드에서
+# 생성이 깨져 답이 한 글자로 잘리는 버그가 있어 기본값에 맞춘다.
+GEN_NUM_CTX = 4096
+# 모델에 넣을 문맥의 최대 글자 수. num_ctx(4096 토큰) 안에 답 생성 여유까지 남기도록
+# 넉넉히 잡되(한국어 ~1.5자/토큰), 상위 청크만 골라 넣어 컨텍스트 초과 truncation 을 막는다.
+CONTEXT_CHAR_BUDGET = 3500
+# 한 노트가 상위 청크를 독식해 다른 노트(정작 답이 든)가 밀려나는 것을 막는 노트당 청크 상한.
+MAX_CHUNKS_PER_NOTE = 2
 
 
 def answer(question: str, k: int = DEFAULT_K, model: str | None = None) -> tuple[str, list[str]]:
@@ -259,10 +277,24 @@ def answer(question: str, k: int = DEFAULT_K, model: str | None = None) -> tuple
     hits = search(question, k=k)
     if not hits:
         return "관련 노트를 찾지 못했습니다. 질문을 바꿔 다시 시도해 주세요.", []
-    context = "\n\n---\n\n".join(f"[{h['note_name']}]\n{h['text']}" for h in hits)
+    # 관련도 순으로 담되, (1) 노트당 청크 상한으로 다양성을 확보하고 (2) 문맥 예산을 지킨다.
+    picked: list[dict] = []
+    total = 0
+    per_note: dict[str, int] = {}
+    for h in hits:
+        if per_note.get(h["note_name"], 0) >= MAX_CHUNKS_PER_NOTE:
+            continue
+        block = f"[{h['note_name']}]\n{h['text']}"
+        if picked and total + len(block) > CONTEXT_CHAR_BUDGET:
+            continue
+        picked.append(h)
+        total += len(block)
+        per_note[h["note_name"]] = per_note.get(h["note_name"], 0) + 1
+    context = "\n\n---\n\n".join(f"[{h['note_name']}]\n{h['text']}" for h in picked)
     prompt = (
-        "아래는 내 개인 노트(볼트)에서 질문과 관련해 검색한 내용이다. "
-        "이 내용만 근거로 한국어로 정확히 답하라. 근거가 부족하면 모른다고 답하라.\n\n"
+        "아래는 내 노트(볼트)에서 질문과 관련해 검색한 내용이다(스캔 OCR로 글자가 일부 "
+        "깨졌을 수 있다). 이 내용을 근거로 한국어로 구체적으로 답하라. 숫자·날짜·금액·면적 "
+        "등 값이 노트에 있으면 반드시 찾아 제시하라. 정말 관련 근거가 없을 때만 모른다고 답하라.\n\n"
         f"# 검색된 노트\n{context}\n\n# 질문\n{question}\n"
     )
     resp = _client.chat(
@@ -273,7 +305,7 @@ def answer(question: str, k: int = DEFAULT_K, model: str | None = None) -> tuple
     )
     ans = (resp.get("message") or {}).get("content", "").strip()
     names: list[str] = []
-    for h in hits:
+    for h in picked:  # 실제로 문맥에 넣은 노트만 출처로 표기(정직한 인용)
         if h["note_name"] not in names:
             names.append(h["note_name"])
     return ans, names
