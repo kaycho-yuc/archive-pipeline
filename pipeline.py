@@ -343,6 +343,21 @@ def _explode_msg_attachments(
             logger.exception("이메일 첨부 처리 실패(건너뜀): %s ← %s", name, msg_path.name)
 
 
+def _index_note_best_effort(note_path: Path) -> None:
+    """새 노트를 로컬 RAG 인덱스에 반영한다(best-effort).
+
+    실패해도 파일 처리를 막지 않는다. Ollama 가 멈춰 있으면(pause_ai) 조용히 건너뛰고,
+    감시기의 주기적 전체 재색인(watch.py)이 나중에 따라잡는다. RAG_BACKEND=local 일 때만 동작."""
+    if os.getenv("RAG_BACKEND", "local").lower() != "local":
+        return
+    try:
+        import rag_local
+
+        rag_local.index_note(note_path)
+    except Exception:
+        logger.warning("로컬 RAG 색인 건너뜀(다음 전체 재색인에서 반영): %s", note_path.name)
+
+
 def process_file(
     file_path: Path,
     vault_path: Path = VAULT_PATH,
@@ -393,6 +408,7 @@ def process_file(
 
         note_path = write_note(result, name, text, vault_path, origin_email=origin_email)
         logger.info("노트 저장: %s", note_path)
+        _index_note_best_effort(note_path)  # 새 노트를 로컬 RAG 에 즉시 반영(best-effort)
 
         _record_hash(file_hash, name, str(note_path))
         archived = _move_to(file_path, archive_dir)

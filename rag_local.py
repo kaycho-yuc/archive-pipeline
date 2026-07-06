@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import logging
 import os
 import re
 from pathlib import Path
@@ -27,6 +28,8 @@ import pyarrow as pa
 from dotenv import load_dotenv
 
 load_dotenv()
+
+logger = logging.getLogger("archive_pipeline")
 
 EMBED_MODEL = os.getenv("RAG_EMBED_MODEL", "bge-m3")
 EMBED_DIM = 1024  # bge-m3 출력 차원
@@ -196,6 +199,45 @@ def ingest(reset: bool = False, verbose: bool = True) -> dict:
     if verbose:
         print(f"\n색인 완료: 추가 {added}, 갱신 {updated}, 건너뜀 {skipped}, 노트 {len(notes)}, 청크행 {stats['rows']}")
     return stats
+
+
+def index_note(path) -> bool:
+    """노트 한 개를 색인한다(추가/갱신). 파이프라인이 새 노트를 쓴 직후 호출용.
+
+    임베딩을 먼저 끝낸 뒤에야 테이블을 건드리므로, Ollama 정지(pause_ai) 등으로 임베딩이
+    실패하면 기존 인덱스를 그대로 보존하고 False 를 돌려준다(파일 처리는 막지 않는다).
+    """
+    path = Path(path)
+    try:
+        text = path.read_text(encoding="utf-8")
+    except Exception:
+        logger.warning("색인용 노트 읽기 실패: %s", path)
+        return False
+    header, body = _split_note(text, path.stem)
+    chunks = chunk_text(body, header)
+    try:
+        vectors = embed(chunks)
+    except Exception:
+        logger.warning("임베딩 실패로 색인 건너뜀(다음 전체 재색인에서 반영): %s", path.name)
+        return False
+    sha = _sha256(text)
+    tbl = connect()
+    tbl.delete(f"note_name = {_sql_quote(path.name)}")  # 갱신이면 옛 청크 제거(없으면 무해)
+    tbl.add(
+        [
+            {
+                "id": f"{path.name}::{j}",
+                "note_name": path.name,
+                "note_path": str(path),
+                "note_sha": sha,
+                "chunk_idx": j,
+                "text": chunks[j],
+                "vector": vectors[j],
+            }
+            for j in range(len(chunks))
+        ]
+    )
+    return True
 
 
 def search(query: str, k: int = 5) -> list[dict]:
