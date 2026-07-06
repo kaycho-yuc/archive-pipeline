@@ -6,7 +6,7 @@
 > The original RAG vision is in [`archive-pipeline-handoff.md`](archive-pipeline-handoff.md).
 >
 > Owner: a non-programmer Korean architect / BIM manager. **Read "Working with the owner" below before making changes.**
-> Last updated: 2026-06-10.
+> Last updated: 2026-07-06.
 
 ---
 
@@ -21,7 +21,7 @@ PHASE 1 │ Robustness & autonomy   OCR, HWP/HWPX, dedup, quarantine, Telegram a
         ├─────────────────────────────────────────────────────────────────────┤
 PHASE 2 │ Knowledge / vault       tag-based schema v2, time folders, migrations       ✅ DONE
         ├─────────────────────────────────────────────────────────────────────┤
-PHASE 3 │ RAG layer               Open WebUI + bge-m3, vault ingested, localhost-only  ✅ DONE
+PHASE 3 │ RAG layer               local RAG: LanceDB + bge-m3 (was Open WebUI+MiniLM)   ✅ DONE
         ├─────────────────────────────────────────────────────────────────────┤
 PHASE 4 │ Conversational access   Telegram bot (RAG, EXAONE 3.5), resource monitor,
         │                         pause/resume for Revit/Enscape                       ✅ DONE
@@ -81,7 +81,9 @@ scanned or in Hangul (HWP). Manually organizing and recalling this is slow. The 
 | Resource **black-box monitor** (RAM/CPU/GPU/models every 30s) | A hard freeze left no diagnostic data; prime suspect was `gemma4:26b` (18GB) overflowing the 16GB GPU | `monitor.py` |
 | **pause/resume** scripts, **no keep-warm** | Revit/Enscape need the VRAM; owner accepts ~5-10s first-answer delay | `pause_ai.ps1`, `resume_ai.ps1` |
 | Open WebUI bound to **127.0.0.1 only** | It was exposed on the tailnet where another user (`jisoo.park@`) lives; the vault is private | container run args |
-| Embedder = **bge-m3** (not nomic/MiniLM) | Multilingual; far better Korean recall. Switching dims requires KB reset + re-ingest | Open WebUI config |
+| **Local RAG** (LanceDB + bge-m3) replaced Open WebUI (2026-07-06) | Open WebUI's default embedder was silently **all-MiniLM-L6-v2 (English)** → poor Korean recall; and Docker was an oversized, failure-prone middle layer (went down unnoticed; upgrades wiped the KB). In-process LanceDB removes that class of failure. `RAG_BACKEND` toggles back to `openwebui` as fallback | `rag_local.py`, `telegram_bot.py` |
+| Embedder = **bge-m3** (not nomic/MiniLM) | Multilingual; far better Korean recall. Now run locally via Ollama (1024-dim) | `rag_local.py` |
+| Chunks stamped with note **frontmatter** (title/date/category) | Scan OCR is noisy; the clean metadata lets date/category questions answer precisely | `rag_local.py _split_note` |
 | Telegram bot via **outbound long-poll** | Phone access from anywhere with **no inbound ports / no tunnel**; vault stays home | `telegram_bot.py` |
 | Bot answers **only the owner's chat_id** | It's a private brain | `telegram_bot.py` |
 | Bot model = **EXAONE 3.5 7.8B** (benchmarked vs mistral-nemo, qwen2.5-14B) | Korean-native won on fluency, grounding, speed, *and* smallest VRAM. The 14B model was worst (slow, drifted to Chinese). **Lesson: bigger ≠ better for Korean RAG.** | `bench_models.py`, `.env` |
@@ -96,8 +98,9 @@ scanned or in Hangul (HWP). Manually organizing and recalling this is slow. The 
 
 Everything in Phases 0–5 runs under one Windows Task Scheduler job (`ArchivePipelineWatch`)
 that starts on boot and launches three daemon threads: the file **watcher**, the **resource
-monitor**, and the **Telegram bot**. Open WebUI runs in Docker (localhost-only) as the RAG
-engine over a bge-m3 knowledge base of ~185 vault notes. The owner drops files into the iCloud
+monitor**, and the **Telegram bot**. RAG runs **in-process** (`rag_local.py`: LanceDB + bge-m3,
+no Docker) over ~236 vault notes; Open WebUI remains only as an env-selectable fallback
+(`RAG_BACKEND=openwebui`), pending decommission. The owner drops files into the iCloud
 `_inbox`; notes land in the Obsidian vault with tags and (for work) a `project` field; the
 original is archived locally; and the owner can ask questions in Korean from their phone.
 `pause_ai.ps1` frees ~9GB RAM + all VRAM before Revit/Enscape. See `SYSTEM-HANDOFF.md` for files.
@@ -124,14 +127,43 @@ Ordered roughly by value-to-effort. Each is independent.
 - **More formats.** ✅ `.xlsx` (estimates/내역서), `.docx`, `.msg` (emails), `.xml` (전자세금계산서)
   are now extracted and routed through the pipeline. Still future: `.pptx`, archive expansion
   (`.zip`/`.alz`), `.dwg` metadata.
+- **Extraction quality upgrade (Docling / PaddleOCR).** Tesseract on Korean scans produces
+  garbled text — observed character-doubling on the 685-317 대수선 필증 scan
+  (`발발급급확확인인번번호호`), and loses table/layout structure. Plan: **Docling** for native/
+  complex PDF + office docs (structure→markdown, tables preserved), **PaddleOCR** (CJK-strong)
+  for Korean scans; keep tuned Tesseract as fallback and A/B before adopting. Heavy deps (torch)
+  → run **on-demand only**, add to `pause_ai`, mind the 16 GB VRAM shared with Revit/Enscape.
+  Re-processing already-filed notes needs the archived originals in `_archive`.
 
-### Phase 8 — Smarter retrieval
-- **Hybrid search** (BM25 + semantic). Helps Korean proper nouns / lot numbers that embeddings
-  blur (685-317 vs 685-383). Toggle `ENABLE_RAG_HYBRID_SEARCH` in Open WebUI and tune weights.
-- **Auto re-ingest.** Today the KB is a manual snapshot. Make new/changed vault notes sync into
-  the KB automatically (e.g. the watcher calls the ingest API after writing a note). Mind the
-  reset/dedup quirks documented in `SYSTEM-HANDOFF.md` / memory.
-- **Re-rank** for tighter top results (Open WebUI supports a reranker model).
+### Phase 8 — Smarter retrieval (local RAG follow-ups from the 2026-07-06 migration)
+> RAG is now in-process (`rag_local.py`: LanceDB + bge-m3). These items build on it.
+- **Hybrid search** (BM25/full-text + semantic). The clearest gap: ambiguous queries where the
+  embedding blurs proper nouns / lot numbers — e.g. "685-317 **건축**허가 필증" retrieves the
+  685-383 **증축** note or 공정표 because "건축허가" is generic and 685-317 appears in many docs.
+  LanceDB has a native full-text index (`create_fts_index`) → combine keyword + vector scores.
+  This is the highest-value next step for retrieval accuracy.
+- **Re-rank.** Add a cross-encoder reranker (e.g. bge-reranker-v2-m3 via Ollama/local) over the
+  top-k before generation, to pull the exact right note above same-지번 siblings.
+- **Auto re-ingest.** Today the index is refreshed by re-running `ingest_vault.py` (manual /
+  `/my-vault` sync). Wire the watcher to index a note right after `pipeline.process_file` writes it
+  (a targeted single-note `rag_local` call). Requirements so it stays sane: **best-effort /
+  non-fatal** (an embed failure must not break filing), **graceful skip while `pause_ai` has Ollama
+  stopped**, keep a **periodic full re-ingest as backstop** (covers the pause window + manual vault
+  edits/renames the watcher never sees). Single-writer holds (watcher is serial; bot only reads),
+  so LanceDB concurrency is fine. See "Auto-index feasibility" note below.
+- **Project-scoped retrieval** once Phase 6 lands: filter LanceDB search by the `project` column.
+
+**Auto-index feasibility (answering "is anything unreasonable about it?"):** No blocker — it's
+cheap (bge-m3 ~1.2 GB, one small embed per new note) and safe (serial writer + read-only bot).
+The only *irrational* ways to do it are (a) making it fatal to filing, or (b) full-scanning all
+notes on every file. Avoid both: catch/skip on failure, index just the one note, and rely on the
+periodic full re-ingest to catch anything missed during a `pause_ai` window or manual edit.
+
+### Decommission — remove Open WebUI / Docker (after local RAG is proven in daily use)
+Open WebUI is kept only as a fallback (`RAG_BACKEND=openwebui`). Once the local path is trusted:
+drop the Docker dependency, simplify `run_watch.py` / `pause_ai.ps1` (no container to stop),
+update the `/my-vault` skill (Op1 health check no longer needs `docker ps`), and remove the
+`OPENWEBUI_*` config. Reclaims RAM and deletes an entire failure class.
 
 ### Phase 9 — Safety & ops
 - **Sensitivity pre-flag.** Regex/heuristics to flag notes containing personal data (주민번호,
@@ -166,11 +198,12 @@ Ordered roughly by value-to-effort. Each is independent.
 
 1. Read `README.md`, then `SYSTEM-HANDOFF.md` (as-built), then this file (the why + what's next).
 2. Config & secrets live in `.env` (gitignored); template in `.env.example`.
-3. Run `python run_once.py` to process the inbox once; `pytest -q` for the test suite (24 tests).
+3. Run `python run_once.py` to process the inbox once; `pytest -q` for the test suite (52 tests).
 4. The live system = the `ArchivePipelineWatch` task (watcher + monitor + bot). Restart with
    **Stop + Start** (no `Restart-ScheduledTask` on this PowerShell).
-5. RAG knobs live server-side in the `open-webui` Docker volume (TOP_K, embedder, RAG_TEMPLATE) —
-   NOT in git. Change via the `/api/v1/retrieval/*` endpoints.
+5. RAG runs locally in `rag_local.py` (LanceDB index at `rag_db/`, gitignored; embedder bge-m3,
+   `DEFAULT_K`, `GEN_NUM_CTX` are constants there). Legacy Open WebUI knobs apply only when
+   `RAG_BACKEND=openwebui`.
 6. Persistent project memory for the AI assistant is in
    `~/.claude/projects/.../memory/` (indexed by `MEMORY.md`) — read it; it captures the gotchas.
 ```
