@@ -99,6 +99,17 @@ def _split_note(text: str, fallback_title: str) -> tuple[str, str]:
     return header, body
 
 
+# 노트 본문의 '## 요약' 섹션(분류 시 LLM 이 쓴 깨끗한 핵심 요약)을 뽑는다. 스캔 OCR 원문은
+# 글자가 깨져 작은 모델이 값을 못 읽을 때가 있는데, 이 깨끗한 요약을 답변 문맥에 함께 넣으면
+# 날짜·면적·금액 같은 값을 안정적으로 찾아낸다.
+_SUMMARY_RE = re.compile(r"##\s*요약\s*\n+(.+?)(?:\n##\s|\Z)", re.DOTALL)
+
+
+def _extract_summary(text: str) -> str:
+    m = _SUMMARY_RE.search(text)
+    return re.sub(r"\s+", " ", m.group(1)).strip()[:400] if m else ""
+
+
 def chunk_text(body: str, header: str) -> list[str]:
     """본문을 문단 경계로 CHUNK_CHARS 근처에서 자르고, 각 청크에 헤더(제목+메타)를 붙인다.
 
@@ -142,6 +153,7 @@ def _schema() -> pa.Schema:
             pa.field("note_sha", pa.string()),
             pa.field("chunk_idx", pa.int32()),
             pa.field("text", pa.string()),
+            pa.field("summary", pa.string()),
             pa.field("vector", pa.list_(pa.float32(), EMBED_DIM)),
         ]
     )
@@ -188,6 +200,7 @@ def ingest(reset: bool = False, verbose: bool = True) -> dict:
         else:
             added += 1
         header, body = _split_note(text, note.stem)
+        summary = _extract_summary(text)
         chunks = chunk_text(body, header)
         vectors = embed(chunks)
         tbl.add(
@@ -199,6 +212,7 @@ def ingest(reset: bool = False, verbose: bool = True) -> dict:
                     "note_sha": sha,
                     "chunk_idx": j,
                     "text": chunks[j],
+                    "summary": summary,
                     "vector": vectors[j],
                 }
                 for j in range(len(chunks))
@@ -226,6 +240,7 @@ def index_note(path) -> bool:
         logger.warning("색인용 노트 읽기 실패: %s", path)
         return False
     header, body = _split_note(text, path.stem)
+    summary = _extract_summary(text)
     chunks = chunk_text(body, header)
     try:
         vectors = embed(chunks)
@@ -244,6 +259,7 @@ def index_note(path) -> bool:
                 "note_sha": sha,
                 "chunk_idx": j,
                 "text": chunks[j],
+                "summary": summary,
                 "vector": vectors[j],
             }
             for j in range(len(chunks))
@@ -290,7 +306,17 @@ def answer(question: str, k: int = DEFAULT_K, model: str | None = None) -> tuple
         picked.append(h)
         total += len(block)
         per_note[h["note_name"]] = per_note.get(h["note_name"], 0) + 1
-    context = "\n\n---\n\n".join(f"[{h['note_name']}]\n{h['text']}" for h in picked)
+    # 노트별로 묶어, 각 노트의 깨끗한 요약을 먼저 주고 그 다음 검색된 청크(원문 조각)를 준다.
+    # 요약엔 날짜·면적·금액 등 값이 정제돼 있어, 원문이 OCR 로 깨져도 모델이 값을 찾는다.
+    groups: dict[str, dict] = {}
+    for h in picked:
+        g = groups.setdefault(h["note_name"], {"summary": h.get("summary") or "", "chunks": []})
+        g["chunks"].append(h["text"])
+    blocks = []
+    for name, g in groups.items():
+        summary_line = f"요약: {g['summary']}\n" if g["summary"] else ""
+        blocks.append(f"[{name}]\n{summary_line}" + "\n".join(g["chunks"]))
+    context = "\n\n---\n\n".join(blocks)
     prompt = (
         "아래는 내 노트(볼트)에서 질문과 관련해 검색한 내용이다(스캔 OCR로 글자가 일부 "
         "깨졌을 수 있다). 이 내용을 근거로 한국어로 구체적으로 답하라. 숫자·날짜·금액·면적 "
