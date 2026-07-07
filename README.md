@@ -96,6 +96,9 @@ uv run python ingest_vault.py --reset    # 전체 재색인
 
 Revit·Enscape 등 무거운 작업 전에는 AI 스택을 잠시 멈춰 메모리를 비운다:
 
+가장 쉬운 방법은 파일 탐색기에서 **`pause_ai.bat` 를 더블클릭**(작업 후 `resume_ai.bat` 더블클릭).
+명령으로 실행하려면:
+
 ```powershell
 powershell -ExecutionPolicy Bypass -File pause_ai.ps1    # 멈추고 ~9GB RAM + VRAM 회수
 powershell -ExecutionPolicy Bypass -File resume_ai.ps1   # 다시 켜기
