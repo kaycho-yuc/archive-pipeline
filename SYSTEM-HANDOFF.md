@@ -121,17 +121,27 @@ _inbox/ (iCloud)  ──감시/스윕──►  process_file()
 
 ## 7. 알려진 제약 / 함정
 
-1. **지원하지 않는 형식이 많음**: 현재 실제 `_inbox`에는 `.xlsx .msg .dwg .pptx .zip .alz`가 대다수인데 파이프라인은 PDF/이미지/txt/md/hwp/hwpx만 처리. 나머지는 그냥 건너뜀.
+1. **일부 형식 미지원**: 이제 PDF/이미지/txt/md/hwp/hwpx **+ xlsx/docx/msg/xml**까지 처리한다. 남은 미지원(`.dwg .pptx .zip .alz`)은 볼트 노트 `미지원_파일_목록.md`에 기록한 뒤 `_failed`로 격리한다(그냥 건너뛰지 않음).
 2. **iCloud 온라인 전용 placeholder 지연**: 다운로드되지 않은 파일을 만지면 watcher가 I/O에서 멈춘 것처럼 보일 수 있음(가짜 행). 격리 테스트로 추출/복사 자체는 빠름을 확인.
 3. **pyhwp 한계**: 일부 `.hwp`가 `OleStream ... propertySetStream` AttributeError → 우아하게 `_failed` 격리.
 4. **머신 환경변수 `OLLAMA_HOST=0.0.0.0`** 은 그대로 두되 코드에서 무력화함(머신 설정 보존 원칙).
 
 ---
 
-## 8. 아직 안 만든 것(로드맵 — `archive-pipeline-handoff.md` 참고)
+## 8. RAG 레이어(구축 완료, 2026-07)
 
-- Open WebUI(Docker) 기반 RAG 레이어: 볼트를 지식베이스로 등록, ChromaDB 임베딩. 현재 **localhost(127.0.0.1:3000)로만 기동**, 관리자 계정/지식베이스 설정 미완. Tailscale 공개 시 포트 3000을 본인 기기로만 제한하는 ACL 필요(타 사용자 jisoo.park@ 제외).
-- 로컬 Whisper(음성), 비전 모델(스케치 인식), 정규식 민감정보 사전 플래그.
+- **로컬 인프로세스 RAG** — `rag_local.py`: 볼트 노트를 bge-m3(Ollama, 1024차원)로 임베딩해
+  파일 기반 **LanceDB**(`rag_db/`, git 제외)에 저장·검색. **Docker/Open WebUI 불필요.**
+  - 하이브리드 검색(키워드 FTS + 벡터, RRF 결합)으로 지번·'연면적' 같은 정확 용어를 잡음.
+  - 각 청크에 노트 frontmatter(제목·날짜·분류)를 각인, 답변 시 노트별 깨끗한 `요약`을 함께
+    제공 → 스캔 OCR이 깨져도 값 추출. 답변 생성 temperature 0.3.
+  - 새 노트는 `pipeline.process_file` 이후 `index_note()`로 즉시 색인(best-effort), 감시기가
+    1시간마다 증분 전체 재색인으로 보완(pause_ai 구간·수동 편집 포함).
+  - `RAG_BACKEND` 로 `local`(기본)/`openwebui`(구 경로, 폴백) 전환. 임베딩 주의: 구 Open
+    WebUI 기본 임베더는 영어 전용 all-MiniLM-L6-v2라 한국어 검색이 약했음(이전 이유).
+- **아직 안 만든 것**: 리랭커·프로젝트별 RAG 필터(선택), 로컬 Whisper(음성), 비전 모델
+  (스케치), 정규식 민감정보 사전 플래그, 네이티브 PDF 표 추출(Docling, 안정 환경에서). 상세는
+  `ROADMAP.md`.
 
 ---
 
