@@ -221,6 +221,14 @@ def ingest(reset: bool = False, verbose: bool = True) -> dict:
         if verbose:
             print(f"[{i}/{len(notes)}] {'갱신' if note.name in existing else '추가'} {note.name} ({len(chunks)}청크)")
 
+    # 전문(FTS) 인덱스를 (재)생성한다. 하이브리드 검색(키워드+벡터)이 지번·'연면적' 같은
+    # 정확한 용어를 잘 잡는다. FTS 는 정적이라 add 후 재생성이 필요한데, 여기(전체/주기 색인)
+    # 에서 다시 만들어 index_note 로 들어온 새 노트도 다음 주기에 FTS 검색에 포함된다.
+    try:
+        tbl.create_fts_index("text", replace=True)
+    except Exception:
+        logger.warning("FTS 인덱스 생성 실패(벡터 검색으로 폴백)")
+
     stats = {"added": added, "updated": updated, "skipped": skipped, "total": len(notes), "rows": tbl.count_rows()}
     if verbose:
         print(f"\n색인 완료: 추가 {added}, 갱신 {updated}, 건너뜀 {skipped}, 노트 {len(notes)}, 청크행 {stats['rows']}")
@@ -269,10 +277,27 @@ def index_note(path) -> bool:
 
 
 def search(query: str, k: int = 5) -> list[dict]:
-    """질의를 임베딩해 상위 k 청크를 돌려준다(note_name, text, _distance 포함)."""
+    """질의로 상위 k 청크를 돌려준다. 하이브리드(키워드+벡터), FTS 없으면 벡터로 폴백.
+
+    하이브리드는 지번(685-317)·'연면적' 같은 정확한 용어를 키워드로 잡아, 임베딩만으로는
+    흐려지는 고유명사·같은 프로젝트 내 유사 문서 구분에 강하다.
+    """
     tbl = connect()
     qv = embed([query])[0]
-    return tbl.search(qv).limit(k).to_list()
+    try:
+        from lancedb.rerankers import RRFReranker
+
+        return (
+            tbl.search(query_type="hybrid")
+            .vector(qv)
+            .text(query)
+            .rerank(RRFReranker())
+            .limit(k)
+            .to_list()
+        )
+    except Exception:
+        # FTS 인덱스가 아직 없거나(최초 색인 전) 하이브리드 실패 시 벡터 검색으로 폴백.
+        return tbl.search(qv).limit(k).to_list()
 
 
 # 검색 후보 청크 수. 제목이 겹치는 노트(같은 지번의 여러 문서)가 상위를 차지해 정작 답이
@@ -327,7 +352,8 @@ def answer(question: str, k: int = DEFAULT_K, model: str | None = None) -> tuple
         model=model or GEN_MODEL,
         messages=[{"role": "user", "content": prompt}],
         stream=False,
-        options={"num_ctx": GEN_NUM_CTX},
+        # 낮은 temperature: 사실 질의라 창의성보다 일관·정확한 값 추출이 중요하다.
+        options={"num_ctx": GEN_NUM_CTX, "temperature": 0.3},
     )
     ans = (resp.get("message") or {}).get("content", "").strip()
     names: list[str] = []
@@ -346,7 +372,8 @@ def main() -> None:
 
     if args.query:
         for h in search(args.query, k=args.k):
-            print(f"· {h['note_name']}  (거리 {h['_distance']:.3f})")
+            score = h.get("_relevance_score", h.get("_distance", 0.0))
+            print(f"· {h['note_name']}  ({score:.3f})")
         return
     ingest(reset=args.reset)
 
