@@ -157,13 +157,21 @@ Ordered roughly by value-to-effort. Each is independent.
 
 ### Phase 8 — Smarter retrieval (local RAG follow-ups from the 2026-07-06 migration)
 > RAG is now in-process (`rag_local.py`: LanceDB + bge-m3). These items build on it.
-- **Hybrid search** (BM25/full-text + semantic). The clearest gap: ambiguous queries where the
-  embedding blurs proper nouns / lot numbers — e.g. "685-317 **건축**허가 필증" retrieves the
-  685-383 **증축** note or 공정표 because "건축허가" is generic and 685-317 appears in many docs.
-  LanceDB has a native full-text index (`create_fts_index`) → combine keyword + vector scores.
-  This is the highest-value next step for retrieval accuracy.
-- **Re-rank.** Add a cross-encoder reranker (e.g. bge-reranker-v2-m3 via Ollama/local) over the
-  top-k before generation, to pull the exact right note above same-지번 siblings.
+- **Answer grounding (DONE 2026-07-08).** Fixed the "bot won't read facts from garbled scans"
+  problem without a reranker: each note stores its clean `## 요약` (summary column); at answer
+  time chunks are grouped by note with the summary prepended. Also fixed 3 answer-breaking bugs
+  (num_ctx=8192 → 1-char replies; oversized OCR chunks overflowing context; one note monopolizing
+  the top-k). Tuning knobs in `rag_local.py`: `DEFAULT_K`, `CONTEXT_CHAR_BUDGET`,
+  `MAX_CHUNKS_PER_NOTE`, `GEN_NUM_CTX`.
+- **Hybrid search** (BM25/full-text + semantic). ◻ OPTIONAL remaining. Still helps ambiguous
+  queries where the embedding blurs proper nouns / lot numbers (685-317 vs 685-383). LanceDB has
+  a native full-text index (`create_fts_index`) + `RRFReranker` to combine keyword + vector scores
+  (no model download). Caveat to test: tantivy's Korean tokenization is weak for space-less
+  Hangul; may need an ngram tokenizer. Lower priority now that summary-grounding handles most
+  factual misses.
+- **Re-rank.** ◻ OPTIONAL. A cross-encoder reranker (e.g. bge-reranker-v2-m3) over the top-k
+  would pull the exact right note above same-지번 siblings — but adds a model + the torch/
+  transformers dependency weight we hit trouble with in Track 2. Only if hybrid isn't enough.
 - **Auto re-ingest.** Today the index is refreshed by re-running `ingest_vault.py` (manual /
   `/my-vault` sync). Wire the watcher to index a note right after `pipeline.process_file` writes it
   (a targeted single-note `rag_local` call). Requirements so it stays sane: **best-effort /
