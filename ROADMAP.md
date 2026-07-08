@@ -199,8 +199,9 @@ update the `/my-vault` skill (Op1 health check no longer needs `docker ps`), and
 - **Vault backup strategy.** Migrations already zip the vault; formalize a scheduled backup
   (the `vault_backup_*.zip` files are gitignored and pile up — prune or rotate).
 - **Vault dedup cleanup.** ~4 genuine duplicate-content notes exist; a small script could fold them.
-- **Disk hygiene.** Underperforming models (`qwen2.5:14b`, `qwen3.5`, `gemma4:26b`) take ~26GB
-  and aren't used by the bot — removable with owner's OK.
+- **Disk hygiene.** ✅ DONE 2026-07-08 — removed ~61GB of unused Ollama models with owner's OK
+  (gemma4:26b/e4b, codestral, qwen2.5:14b, qwen3.5, mistral-nemo, nomic-embed-text). Kept the
+  three the pipeline uses: `exaone3.5:7.8b`, `bge-m3`, `llama3.1`.
 
 ### Quality-of-life
 - **Double-click `.bat` shortcuts** for pause/resume (owner is a non-programmer).
