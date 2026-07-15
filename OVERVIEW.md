@@ -36,15 +36,16 @@ capture + instant recall, without changing how the owner already works.
    └──────────────────────────────────────────────┘
             │                              │
             ▼                              ▼
-   Obsidian vault                  Open WebUI (Docker, localhost)
-   10_/20_/90_ + YYYY-QN           RAG over the vault (bge-m3)
+   Obsidian vault                  Local RAG (in-process)
+   10_/20_/90_ + YYYY-QN           LanceDB + bge-m3, no Docker
    tag-based, shallow                       │
                                             ▼
                                  Telegram bot ──► ask from your phone (Korean)
 ```
 
 Everything runs as one Windows Task Scheduler job (watcher + resource monitor + Telegram bot,
-each a daemon thread) that starts on boot. ~185 notes currently indexed.
+each a daemon thread) that starts on boot. ~236 notes currently indexed. New notes are auto-indexed
+into the RAG right after filing (hourly full re-index as backstop).
 
 ## Stack (all local)
 
@@ -52,9 +53,9 @@ each a daemon thread) that starts on boot. ~185 notes currently indexed.
 |---|---|
 | LLM runtime | **Ollama** |
 | Classify/summarize | llama3.1 (JSON-mode, schema-hardened for long scans) |
-| Embeddings | **bge-m3** (multilingual, strong Korean) |
+| Embeddings | **bge-m3** (multilingual, strong Korean), via Ollama |
 | Chat / RAG answers | **EXAONE 3.5 7.8B** (LG's Korean-native model) |
-| RAG orchestration | **Open WebUI** (Docker, bound to 127.0.0.1 only) |
+| RAG orchestration | **local, in-process** — LanceDB (file-based vector index) + hybrid full-text search; no Docker. (Legacy Open WebUI selectable via `RAG_BACKEND=openwebui`) |
 | OCR | Tesseract (kor+eng) + PyMuPDF for scanned PDFs |
 | Hangul | pyhwp (.hwp), zip+OWPML parse (.hwpx) |
 | Watch / autorun | watchdog + Windows Task Scheduler |
@@ -84,6 +85,8 @@ Hardware: i9-14900KF / 64GB RAM / RTX 4080 (16GB). Python 3.13 on Windows 11.
 
 ## Status
 
-Working end to end: capture → classify → tagged/project-tagged notes → RAG → Telegram. Next likely
-step is multi-project support (project *detection*) once a second project shows up. See `ROADMAP.md`.
+Working end to end: capture → classify → tagged/project-tagged notes → local RAG → Telegram.
+RAG moved off Open WebUI to an in-process LanceDB + bge-m3 stack (better Korean recall, no Docker
+failure class); project *detection* from lot numbers is in; answers are grounded with each note's
+clean summary and hybrid search. Optional next steps (reranker, project-scoped RAG) in `ROADMAP.md`.
 ```

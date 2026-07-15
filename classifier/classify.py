@@ -7,6 +7,12 @@ from dataclasses import dataclass, field
 from datetime import date
 
 import ollama
+from dotenv import load_dotenv
+
+# 모듈이 pipeline 의 load_dotenv() 보다 먼저 임포트되므로(임포트 순서상) 여기서 직접
+# .env 를 읽어야 OLLAMA_MODEL 등 설정이 반영된다. 안 그러면 아래 기본값(llama3.1)으로
+# 떨어져 의도한 exaone3.5 가 아닌 옛 모델로 분류되는 조용한 버그가 생긴다.
+load_dotenv()
 
 DEFAULT_MODEL = os.getenv("OLLAMA_MODEL", "llama3.1")
 
@@ -18,6 +24,47 @@ PROJECT_IDENTIFIERS = [
     for s in os.getenv("PROJECT_IDENTIFIERS", "685-317,685-383,성수동1가").split(",")
     if s.strip()
 ]
+
+
+def _load_project_registry() -> dict[str, list[str]]:
+    """프로젝트명 → 식별자 목록. 기본 프로젝트(.env) + 선택적 WORK_PROJECTS(JSON) 병합.
+
+    2번째 프로젝트가 생기면 .env 에 예: WORK_PROJECTS={"판교 오피스":["521-3","판교"]}
+    를 넣으면 된다. 형식이 잘못돼도 기본 레지스트리로 안전하게 떨어진다."""
+    registry: dict[str, list[str]] = {PROJECT_NAME: list(PROJECT_IDENTIFIERS)}
+    raw = os.getenv("WORK_PROJECTS", "").strip()
+    if raw:
+        try:
+            for name, ids in json.loads(raw).items():
+                name = str(name).strip()
+                if name:
+                    registry[name] = [str(i).strip() for i in ids if str(i).strip()]
+        except (json.JSONDecodeError, AttributeError, TypeError):
+            pass  # 형식 오류면 기본 레지스트리만 사용(파이프라인을 막지 않음)
+    return registry
+
+
+PROJECT_REGISTRY = _load_project_registry()
+
+
+def _norm_ident(s: str) -> str:
+    """식별자·건초더미를 공백/하이픈/밑줄 제거로 정규화('685-317'='685 317'='685_317')."""
+    return re.sub(r"[\s_\-]", "", s or "")
+
+
+def detect_project(source_name: str, text: str = "") -> str:
+    """파일명(우선)·본문 앞부분에서 프로젝트 식별자를 찾아 프로젝트명을 돌려준다.
+
+    지번(685-317 등)·주소 같은 결정적 식별자로 판별한다. LLM 추측보다 정확하고 안정적.
+    어느 프로젝트에도 안 걸리면 빈 문자열(호출부가 기본 프로젝트로 폴백)."""
+    hay_name = _norm_ident(source_name)
+    hay_text = _norm_ident(text[:MAX_INPUT_CHARS])
+    for name, ids in PROJECT_REGISTRY.items():
+        for ident in ids:
+            key = _norm_ident(ident)
+            if key and (key in hay_name or key in hay_text):
+                return name
+    return ""
 
 KIND_PROJECT = "프로젝트자료"
 KIND_REFERENCE = "참고자료"
@@ -96,6 +143,7 @@ class Classification:
     counterparty: str = ""
     doc_date: str = ""
     status: str = ""
+    project: str = ""
 
 
 def compose_title(category: str, counterparty: str, doc_date: str,
@@ -168,7 +216,26 @@ def _valid_doc_date(value: str) -> str:
     return ""
 
 
-def _parse_response(raw: str) -> Classification:
+# 파일명에 특정 단어가 있으면 모델 분류와 무관하게 category 를 강제한다.
+# 통제 어휘(DOC_TYPES) 밖의 사용자 정의 유형을 일관되게 붙이기 위한 결정적 규칙.
+# (예: '주간운동리뷰' 파일은 항상 category=운동리뷰 → 제목·태그도 운동리뷰로 통일.)
+_FILENAME_CATEGORY_OVERRIDES = {
+    "주간운동리뷰": "운동리뷰",
+}
+
+
+def _category_override(source_name: str) -> str | None:
+    """원본 파일명에 등록된 표지 단어가 있으면 강제할 category 를 돌려준다.
+
+    공백·밑줄을 무시하고 매칭한다('주간 운동 리뷰'·'주간_운동_리뷰'도 인식)."""
+    key = re.sub(r"[\s_]+", "", source_name)
+    for marker, category in _FILENAME_CATEGORY_OVERRIDES.items():
+        if marker in key:
+            return category
+    return None
+
+
+def _parse_response(raw: str, source_name: str = "", text: str = "") -> Classification:
     data = json.loads(raw)
     if not isinstance(data, dict):
         raise ValueError("응답이 JSON 객체가 아닙니다.")
@@ -182,12 +249,19 @@ def _parse_response(raw: str) -> Classification:
     # 안전하게 프로젝트자료로 둬, 실데이터가 봇에서 누락되지 않게 한다.
     kind = KIND_REFERENCE if str(data.get("kind", "")).strip() == KIND_REFERENCE else KIND_PROJECT
 
-    category = str(data.get("category") or "미분류").strip() or "미분류"
+    # 파일명 기반 강제 유형이 있으면 모델 결과보다 우선한다.
+    category = _category_override(source_name) or (
+        str(data.get("category") or "미분류").strip() or "미분류"
+    )
     counterparty = str(data.get("counterparty") or "").strip()
     status = str(data.get("status") or "").strip()
     detail = str(data.get("detail") or "").strip()
     # doc_date 는 형식뿐 아니라 '실제로 존재하는 날짜'인지까지 검증한다(2026-02-32 같은 값 차단).
     doc_date = _valid_doc_date(str(data.get("doc_date") or "").strip())
+
+    # project 는 LLM 추측이 아니라 파일명·본문의 결정적 식별자(지번 등)로 판별한다.
+    # 업무 문서에만 부여하고, 못 찾으면 빈 문자열(write_note 가 기본 프로젝트로 폴백).
+    project = detect_project(source_name, text) if domain == "업무" else ""
 
     return Classification(
         domain=domain,
@@ -199,6 +273,7 @@ def _parse_response(raw: str) -> Classification:
         counterparty=counterparty,
         doc_date=doc_date,
         status=status,
+        project=project,
     )
 
 
@@ -216,7 +291,7 @@ def classify(text: str, source_name: str = "", model: str = DEFAULT_MODEL) -> Cl
     for temperature in RETRY_TEMPERATURES:
         try:
             raw = _call_ollama(messages, model, temperature)
-            return _parse_response(raw)
+            return _parse_response(raw, source_name, text)
         except (json.JSONDecodeError, ValueError, KeyError) as error:
             last_error = error
 

@@ -45,6 +45,27 @@ def test_classify_extracts_fields_and_composes_title(monkeypatch):
     assert result.tags == ["근생", "리모델링"]
 
 
+def test_classify_filename_forces_category_override(monkeypatch):
+    # '주간운동리뷰' 파일은 모델이 다른 유형을 줘도 category=운동리뷰 로 강제된다.
+    payload = {"domain": "개인", "category": "보고서", "doc_date": "2026-06-01"}
+    monkeypatch.setattr(classify_module, "_call_ollama", _fake_response(payload))
+
+    result = classify("내용", source_name="2026-06-01_주간운동리뷰.md")
+
+    assert result.category == "운동리뷰"  # 모델의 '보고서' 대신 강제
+    assert result.title == "2026-06-01 운동리뷰"  # 제목 유형 슬롯도 운동리뷰
+
+
+def test_classify_no_override_without_marker(monkeypatch):
+    # 표지 단어가 없으면 모델 category 를 그대로 쓴다.
+    payload = {"domain": "개인", "category": "보고서"}
+    monkeypatch.setattr(classify_module, "_call_ollama", _fake_response(payload))
+
+    result = classify("내용", source_name="2026-06-18 13회차 운동일지.md")
+
+    assert result.category == "보고서"
+
+
 def test_classify_drops_malformed_doc_date(monkeypatch):
     for bad in ("작성일 미상", "2026-02-32", "2026-13-01"):  # 형식오류 + 없는 날짜
         payload = {"domain": "업무", "category": "견적서", "doc_date": bad}
@@ -125,3 +146,48 @@ def test_classify_retries_then_succeeds(monkeypatch):
 
     assert result.domain == "개인"
     assert result.category == "메모"
+
+
+# --- Track 1: 동적 프로젝트 분류 ---
+
+from classifier.classify import PROJECT_NAME, detect_project  # noqa: E402
+
+
+def test_detect_project_by_filename_identifier():
+    # 파일명에 지번(685-317)이 있으면 기본 프로젝트로 판별. 하이픈·공백 무시 매칭.
+    assert detect_project("685-317 대수선허가 필증.pdf") == PROJECT_NAME
+    assert detect_project("685 383 증축.pdf") == PROJECT_NAME
+    assert detect_project("성수동1가 도급계약.pdf") == PROJECT_NAME
+
+
+def test_detect_project_from_body_when_filename_lacks_id():
+    assert detect_project("계약서.pdf", "본문에 685-317 지번이 나온다") == PROJECT_NAME
+
+
+def test_detect_project_none_when_no_identifier():
+    assert detect_project("일반 회의록.pdf", "지번 없는 내용") == ""
+
+
+def test_detect_project_extra_registry(monkeypatch):
+    # 2번째 프로젝트가 등록되면 그 식별자로 판별된다.
+    monkeypatch.setattr(
+        classify_module,
+        "PROJECT_REGISTRY",
+        {PROJECT_NAME: ["685-317"], "판교 오피스": ["521-3", "판교"]},
+    )
+    assert detect_project("521-3 판교 계약.pdf") == "판교 오피스"
+    assert detect_project("685-317 성수 계약.pdf") == PROJECT_NAME
+
+
+def test_classify_assigns_detected_project(monkeypatch):
+    payload = {"domain": "업무", "category": "허가서", "summary": "s"}
+    monkeypatch.setattr(classify_module, "_call_ollama", _fake_response(payload))
+    result = classify("내용", source_name="685-317 대수선허가 필증.pdf")
+    assert result.project == PROJECT_NAME
+
+
+def test_classify_personal_has_no_project(monkeypatch):
+    payload = {"domain": "개인", "category": "메모", "summary": "s"}
+    monkeypatch.setattr(classify_module, "_call_ollama", _fake_response(payload))
+    result = classify("내용", source_name="685-317 메모.md")
+    assert result.project == ""  # 개인 노트엔 프로젝트를 부여하지 않는다

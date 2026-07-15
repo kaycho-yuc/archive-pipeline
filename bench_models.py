@@ -10,10 +10,12 @@ import urllib.request
 
 import telegram_bot as tb
 
+# 봇 모델은 exaone3.5:7.8b 로 확정됨(벤치마크 결과). 비교용 후보였던 mistral-nemo·qwen2.5:14b
+# 등은 디스크 정리 때 삭제됨 — 다시 비교하려면 `ollama pull` 후 여기에 추가.
+# 주의: 이 스크립트는 구 Open WebUI 경로(tb.KB_ID)를 쓴다. 로컬 RAG 기본 전환 후로는
+# 참고용이며, 로컬 백엔드로 비교하려면 rag_local.answer 를 호출하도록 바꿔야 한다.
 MODELS = [
-    "mistral-nemo:latest",  # 현재 기본(기준선)
-    "exaone3.5:7.8b",       # LG 한국어 특화
-    "qwen2.5:14b",          # 12GB 이하 최강 추론
+    "exaone3.5:7.8b",  # LG 한국어 특화(현재 봇 모델)
 ]
 
 QUESTIONS = [

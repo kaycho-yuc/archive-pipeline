@@ -19,7 +19,7 @@
 _inbox(iCloud) ──감시──► 중복검사(SHA-256) → 텍스트 추출 → LLM 분류·요약
                          → Obsidian 노트 작성(태그 + 업무는 project) → 원본 _archive 이동
                                             │
-                         볼트 ──► Open WebUI RAG(bge-m3) ──► 텔레그램 봇(한국어 질의)
+                         볼트 ──► 로컬 RAG(LanceDB + bge-m3) ──► 텔레그램 봇(한국어 질의)
 ```
 
 ## 구조
@@ -30,11 +30,12 @@ classifier/classify.py  # Ollama로 개인·업무 분류 + 카테고리 + 태�
 notes/write_note.py     # 볼트 10_/20_/90_ + YYYY-QN 폴더에 태그 기반 노트 저장
 pipeline.py             # 추출→분류→저장→아카이브 (파일 1개) + iCloud 하이드레이션 가드
 monitor.py              # 리소스(RAM/CPU/GPU/로드모델) 블랙박스 로깅
+rag_local.py            # 로컬 RAG: 볼트를 bge-m3로 임베딩→LanceDB 저장·검색(Docker 불필요)
 telegram_bot.py         # 볼트 RAG에 텔레그램으로 질의(허가된 사용자만)
 notifier.py             # 실패 시 텔레그램 알림
 watch.py / run_once.py  # _inbox 상시 감시 / 일괄 처리
 run_watch.py            # 작업 스케줄러 진입점(감시기+모니터+봇 동시 기동)
-ingest_vault.py         # 볼트 .md 노트를 Open WebUI 지식베이스로 업로드/임베딩
+ingest_vault.py         # 볼트 .md 노트를 RAG 인덱스에 적재(기본 local, --backend openwebui 선택)
 bench_models.py         # 여러 LLM을 같은 RAG 질문으로 비교(모델 선택용)
 migrate_*.py            # 볼트 구조/필드 마이그레이션(백업 → dry-run → --execute)
 pause_ai.ps1 / resume_ai.ps1  # Revit·Enscape 작업 전후로 RAM/VRAM 비우기/복구
@@ -70,7 +71,7 @@ uv sync
 
 # Ollama (모델 미리 받기)
 ollama pull llama3.1        # 분류·요약
-ollama pull bge-m3          # 임베딩(한국어)
+ollama pull bge-m3          # 다국어 임베딩(한국어). 아래 '임베딩 주의' 참고
 ollama pull exaone3.5:7.8b  # 봇 답변(한국어 특화)
 
 # _inbox 일괄 처리(수동)
@@ -79,9 +80,14 @@ uv run python run_once.py
 # 상시 감시 + 모니터 + 텔레그램 봇(작업 스케줄러가 부팅 시 자동 실행)
 uv run python run_watch.py
 
-# 볼트를 RAG 지식베이스로 적재(최초 1회/노트 추가 후)
-uv run python ingest_vault.py
+# 볼트를 RAG 인덱스로 적재(최초 1회/노트 추가 후). 기본 백엔드는 로컬(LanceDB+bge-m3)
+uv run python ingest_vault.py            # 증분 색인
+uv run python ingest_vault.py --reset    # 전체 재색인
 ```
+
+> **RAG 백엔드:** 기본은 **로컬(LanceDB + bge-m3)** 로 Docker 가 필요 없고 한국어 검색이
+> 우수하다. 인덱스는 `rag_db/`(git 제외)에 저장된다. 구 **Open WebUI** 경로는
+> `RAG_BACKEND=openwebui` 로 전환할 수 있다(폴백용).
 
 > `requirements.txt`가 필요하면 `uv export -o requirements.txt`로 만들 수 있다.
 
@@ -89,6 +95,9 @@ uv run python ingest_vault.py
 (이 PowerShell엔 `Restart-ScheduledTask`가 없으니 재시작은 **Stop + Start**.)
 
 Revit·Enscape 등 무거운 작업 전에는 AI 스택을 잠시 멈춰 메모리를 비운다:
+
+가장 쉬운 방법은 파일 탐색기에서 **`pause_ai.bat` 를 더블클릭**(작업 후 `resume_ai.bat` 더블클릭).
+명령으로 실행하려면:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File pause_ai.ps1    # 멈추고 ~9GB RAM + VRAM 회수
@@ -106,7 +115,11 @@ LLM·OCR·텔레그램 호출은 외부 의존성이라 테스트에서 모킹/�
 
 ## 기술 스택
 
-로컬 전용: Ollama(분류 llama3.1 / 임베딩 bge-m3 / 답변 EXAONE 3.5) · Open WebUI(Docker, localhost 전용) ·
+로컬 전용: Ollama(분류 llama3.1 / 임베딩 bge-m3 / 답변 EXAONE 3.5) · LanceDB(로컬 벡터 인덱스) ·
 Tesseract + PyMuPDF(스캔 OCR) · pyhwp(한글) · watchdog · Telegram Bot API · Obsidian.
 환경: Windows 11 / Python 3.13 / RTX 4080.
+
+> **RAG 임베딩:** 기본 로컬 백엔드는 **bge-m3**(다국어, 1024차원)로 한국어 검색이 우수하다.
+> 구 Open WebUI 백엔드(`RAG_BACKEND=openwebui`)는 기본 임베더가 **all-MiniLM-L6-v2(영어
+> 전용)** 라 한국어 검색이 약하므로, 쓸 경우 관리자 설정에서 bge-m3 로 바꿔야 한다.
 ```

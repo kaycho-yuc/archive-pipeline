@@ -1,12 +1,16 @@
-"""볼트의 모든 .md 노트를 Open WebUI 지식베이스(KC_second_brain)에 올린다.
+"""볼트의 모든 .md 노트를 RAG 인덱스에 적재한다.
 
-Open WebUI REST API 사용:
-  1) 지식베이스 생성(없으면)        POST /api/v1/knowledge/create
-  2) 파일 업로드                    POST /api/v1/files/   (multipart)
-  3) 파일을 지식베이스에 연결        POST /api/v1/knowledge/{id}/file/add
+백엔드(RAG_BACKEND, 기본 local):
+  - local:     rag_local(LanceDB + bge-m3). Docker 불필요, 한국어 검색 우수. 권장.
+  - openwebui: 구 경로. Open WebUI 지식베이스에 업로드·임베딩(REST API).
 
-이미 같은 이름의 지식베이스가 있으면 재사용하고, 이미 올라간 파일명은 건너뛴다
-(중복 임베딩 방지). 임베딩은 서버가 nomic-embed-text 로 자동 수행한다.
+  uv run python ingest_vault.py                 # 기본 백엔드로 증분 적재
+  uv run python ingest_vault.py --reset         # 로컬 인덱스 전체 재색인
+  uv run python ingest_vault.py --backend openwebui   # 구 Open WebUI 경로
+
+openwebui 백엔드 임베딩 주의: Open WebUI 서버가 자체 설정(RAG_EMBEDDING_MODEL)대로
+임베딩하며 기본값은 all-MiniLM-L6-v2(영어 전용, 384차원)라 한국어 검색이 약하다.
+그래서 로컬 백엔드(bge-m3)가 기본이다.
 """
 
 import os
@@ -21,8 +25,6 @@ load_dotenv()
 
 BASE = os.getenv("OPENWEBUI_URL", "http://127.0.0.1:3000")
 API_KEY = os.getenv("OPENWEBUI_API_KEY", "")
-if not API_KEY:
-    sys.exit("OPENWEBUI_API_KEY 가 .env 에 없습니다. Open WebUI → 설정 → 계정 → API 키 발급 후 추가하세요.")
 KB_NAME = "KC_second_brain"
 KB_DESC = "Obsidian 볼트 자동 동기화 지식베이스 (아카이브 파이프라인)"
 VAULT = Path(r"C:\Users\OWNER\iCloudDrive\iCloud~md~obsidian\KC_second_brain")
@@ -95,6 +97,19 @@ def link_to_kb(kb_id: str, file_id: str, retries: int = 4) -> None:
 
 
 def main() -> None:
+    # RAG 백엔드: local(기본, LanceDB+bge-m3) 또는 openwebui(구 Docker 경로).
+    backend = os.getenv("RAG_BACKEND", "local").lower()
+    if "--backend" in sys.argv:
+        backend = sys.argv[sys.argv.index("--backend") + 1].lower()
+
+    if backend == "local":
+        import rag_local
+        rag_local.ingest(reset="--reset" in sys.argv)
+        return
+
+    if not API_KEY:
+        sys.exit("OPENWEBUI_API_KEY 가 .env 에 없습니다. Open WebUI → 설정 → 계정 → API 키 발급 후 추가하세요.")
+
     notes = sorted(
         p
         for d in INCLUDE_DIRS
