@@ -14,7 +14,14 @@ from dotenv import load_dotenv
 # 떨어져 의도한 exaone3.5 가 아닌 옛 모델로 분류되는 조용한 버그가 생긴다.
 load_dotenv()
 
-DEFAULT_MODEL = os.getenv("OLLAMA_MODEL", "llama3.1")
+# 분류·요약 백엔드: ollama(로컬, Windows) 또는 gemini(클라우드, 저사양 Mac용).
+# .env 의 LLM_PROVIDER 로 머신별로 고른다(.env 는 git 제외라 머신마다 다르게 둔다).
+LLM_PROVIDER = os.getenv("LLM_PROVIDER", "ollama").lower()
+DEFAULT_MODEL = (
+    os.getenv("GEMINI_MODEL", "gemini-3.1-flash-lite-preview")
+    if LLM_PROVIDER == "gemini"
+    else os.getenv("OLLAMA_MODEL", "llama3.1")
+)
 
 # 이 프로젝트가 무엇인지(이름 + 식별자)를 분류기에 알려줘, 문서가 '프로젝트 실데이터'인지
 # '참고자료'(템플릿·샘플·정부지침·다른 현장 예시)인지 판단하게 한다.
@@ -188,6 +195,49 @@ def _call_ollama(messages: list[dict], model: str, temperature: float = 0.0) -> 
     return response["message"]["content"]
 
 
+_gemini = None
+
+
+def _gemini_client():
+    """google-genai 클라이언트를 최초 1회만 생성해 캐시한다(모듈 import 시엔 안 만든다)."""
+    global _gemini
+    if _gemini is None:
+        from google import genai  # ollama 전용 머신엔 없을 수 있어 지연 import
+
+        api_key = os.getenv("GEMINI_API_KEY", "").strip()
+        if not api_key:
+            raise ValueError("GEMINI_API_KEY 가 비어 있습니다(.env 에 발급 키를 넣으세요).")
+        _gemini = genai.Client(api_key=api_key)
+    return _gemini
+
+
+def _call_gemini(messages: list[dict], model: str, temperature: float = 0.0) -> str:
+    from google.genai import types
+
+    system = next((m["content"] for m in messages if m["role"] == "system"), "")
+    user = "\n\n".join(m["content"] for m in messages if m["role"] != "system")
+    # 짧은 구조화 JSON 추출이라 thinking 은 낮춰 지연·비용을 줄인다.
+    response = _gemini_client().models.generate_content(
+        model=model,
+        contents=user,
+        config=types.GenerateContentConfig(
+            system_instruction=system,
+            temperature=temperature,
+            max_output_tokens=MAX_OUTPUT_TOKENS,
+            response_mime_type="application/json",
+            thinking_config=types.ThinkingConfig(thinking_level="low"),
+        ),
+    )
+    return response.text
+
+
+def _call_llm(messages: list[dict], model: str, temperature: float = 0.0) -> str:
+    """LLM_PROVIDER 에 따라 gemini/ollama 백엔드로 분기한다."""
+    if LLM_PROVIDER == "gemini":
+        return _call_gemini(messages, model, temperature)
+    return _call_ollama(messages, model, temperature)
+
+
 def _normalize_tags(raw_tags) -> list[str]:
     """tags 를 공백 없는 문자열 리스트로 정규화한다(배열·쉼표문자열 모두 허용)."""
     if isinstance(raw_tags, str):
@@ -290,7 +340,7 @@ def classify(text: str, source_name: str = "", model: str = DEFAULT_MODEL) -> Cl
     last_error: Exception | None = None
     for temperature in RETRY_TEMPERATURES:
         try:
-            raw = _call_ollama(messages, model, temperature)
+            raw = _call_llm(messages, model, temperature)
             return _parse_response(raw, source_name, text)
         except (json.JSONDecodeError, ValueError, KeyError) as error:
             last_error = error
