@@ -216,7 +216,9 @@ def _call_gemini(messages: list[dict], model: str, temperature: float = 0.0) -> 
 
     system = next((m["content"] for m in messages if m["role"] == "system"), "")
     user = "\n\n".join(m["content"] for m in messages if m["role"] != "system")
-    # 짧은 구조화 JSON 추출이라 thinking 은 낮춰 지연·비용을 줄인다.
+    # thinking 토큰은 max_output_tokens 예산을 JSON 출력과 함께 쓴다. 켜두면 thinking 이
+    # 예산을 다 먹어 JSON 이 중간에 잘린다(finish_reason=MAX_TOKENS). 규칙이 명시된
+    # 기계적 추출이라 thinking 이득도 없으므로 끈다.
     response = _gemini_client().models.generate_content(
         model=model,
         contents=user,
@@ -225,7 +227,7 @@ def _call_gemini(messages: list[dict], model: str, temperature: float = 0.0) -> 
             temperature=temperature,
             max_output_tokens=MAX_OUTPUT_TOKENS,
             response_mime_type="application/json",
-            thinking_config=types.ThinkingConfig(thinking_level="low"),
+            thinking_config=types.ThinkingConfig(thinking_level="minimal"),
         ),
     )
     return response.text
