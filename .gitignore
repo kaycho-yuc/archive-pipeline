@@ -18,3 +18,7 @@ vault_backup_*.zip
 
 # 로컬 RAG LanceDB 인덱스(재생성 가능, 커밋 제외)
 rag_db/
+
+# 로컬 폴백 볼트(기본 VAULT_PATH) 및 로컬 에이전트 설정 — 커밋 제외
+vault/
+.agents/
