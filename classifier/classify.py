@@ -18,7 +18,9 @@ load_dotenv()
 # .env 의 LLM_PROVIDER 로 머신별로 고른다(.env 는 git 제외라 머신마다 다르게 둔다).
 LLM_PROVIDER = os.getenv("LLM_PROVIDER", "ollama").lower()
 DEFAULT_MODEL = (
-    os.getenv("GEMINI_MODEL", "gemini-3.1-flash-lite-preview")
+    # GA 이름으로 고정한다. preview 빌드는 예고 없이 내려갈 수 있고, 같은 프롬프트에서
+    # 동작은 동일했다. 후속 3.5-flash-lite 는 통제 어휘를 벗어나 탈락(ROADMAP 결정 기록).
+    os.getenv("GEMINI_MODEL", "gemini-3.1-flash-lite")
     if LLM_PROVIDER == "gemini"
     else os.getenv("OLLAMA_MODEL", "llama3.1")
 )
