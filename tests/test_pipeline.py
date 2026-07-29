@@ -78,15 +78,39 @@ def test_process_file_explodes_msg_attachments(tmp_path, monkeypatch):
 
 
 def test_move_to_times_out_when_move_hangs(tmp_path, monkeypatch):
-    # iCloud 동기화로 shutil.move 가 멈추는 상황을 흉내내 시간 제한이 동작하는지 본다.
+    # iCloud 동기화로 파일 복사가 멈추는 상황을 흉내내 시간 제한이 동작하는지 본다.
     import time
 
     src = tmp_path / "stuck.txt"
     src.write_text("x", encoding="utf-8")
-    monkeypatch.setattr(pipeline.shutil, "move", lambda s, d: time.sleep(5))
+    monkeypatch.setattr(pipeline.shutil, "copy2", lambda s, d: time.sleep(5))
 
     with pytest.raises(TimeoutError):
         pipeline._move_to(src, tmp_path / "archive", timeout=0.5)
+
+
+def test_move_to_leaves_no_partial_at_final_name(tmp_path, monkeypatch):
+    """복사가 도중에 끊겨도 최종 이름엔 잘린 파일이 남으면 안 된다.
+
+    남으면 다음 스윕이 원본을 '중복'으로 보고 -1 을 붙여 넣어, 잘린 파일이 정식 이름을
+    차지하고 온전한 원본이 -1 로 밀린다(조용한 아카이브 손상)."""
+    from pathlib import Path
+
+    src = tmp_path / "doc.txt"
+    src.write_text("온전한 원본", encoding="utf-8")
+    archive = tmp_path / "archive"
+
+    def _copy_then_die(source, destination):
+        Path(destination).write_text("잘린", encoding="utf-8")
+        raise OSError("복사 중 프로세스 중단")
+
+    monkeypatch.setattr(pipeline.shutil, "copy2", _copy_then_die)
+    with pytest.raises(OSError):
+        pipeline._move_to(src, archive)
+
+    assert not (archive / "doc.txt").exists()  # 최종 이름은 비어 있어야 한다
+    assert list(archive.glob("*.part")) == []  # 실패한 조각도 남기지 않는다
+    assert src.read_text(encoding="utf-8") == "온전한 원본"  # 원본은 그대로
 
 
 def test_process_file_defers_on_move_timeout(tmp_path, monkeypatch):

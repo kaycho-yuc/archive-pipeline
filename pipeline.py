@@ -175,7 +175,7 @@ def prune_empty_dirs(root: Path) -> None:
                 logger.debug("빈 폴더 제거 실패(건너뜀): %s", dirpath)
 
 
-# iCloud 가 동기화 중인 파일은 shutil.move(복사 후 원본 unlink)가 무한정 멈출 수 있다.
+# iCloud 가 동기화 중인 파일은 이동(복사 후 원본 unlink)이 무한정 멈출 수 있다.
 # 한 파일의 멈춤이 전체 파이프라인을 얼리지 않도록 이동에 시간 제한을 둔다.
 MOVE_TIMEOUT = float(os.getenv("MOVE_TIMEOUT", "20"))
 
@@ -194,11 +194,28 @@ def _move_to(file_path: Path, dest_dir: Path, timeout: float = MOVE_TIMEOUT) -> 
 
     outcome: dict = {}
 
+    # 복사 도중 프로세스가 죽으면 '잘린 파일'이 최종 이름을 차지하고, 다음 스윕은 원본을
+    # 중복으로 보고 -1 을 붙여 넣는다 — 온전한 원본이 -1 로 밀리고 잘린 파일이 정식 이름을
+    # 갖는 최악의 결과. 임시 이름으로 복사한 뒤 제자리에 놓아 최종 이름엔 완전한 파일만 남긴다.
+    partial = dest.with_name(dest.name + ".part")
+
     def _do() -> None:
         try:
-            shutil.move(str(file_path), str(dest))
+            # shutil.move 를 쓰지 않는다: 같은 볼륨으로 보이면 os.rename 을 먼저 시도하는데,
+            # iCloud 동기화 루트 '밖'으로의 rename 은 Windows 클라우드 필터 드라이버가
+            # 가로채 60초를 멈춘 뒤 WinError 426 으로 실패한다(shutil 의 복사 폴백은 그
+            # 뒤에야 실행돼 아래 timeout 에 먼저 걸린다). 복사 후 삭제는 같은 경계에서
+            # 0.02초로 끝나므로 rename 을 아예 거치지 않는다.
+            shutil.copy2(str(file_path), str(partial))
+            # 같은 폴더 안(=클라우드 경계를 넘지 않음)이라 이 rename 은 원자적이고 안전하다.
+            os.replace(str(partial), str(dest))
+            os.unlink(str(file_path))
             outcome["ok"] = True
         except Exception as exc:  # noqa: BLE001 — 스레드 내 예외를 호출부로 전달
+            try:
+                partial.unlink(missing_ok=True)  # 실패한 조각을 아카이브에 남기지 않는다
+            except OSError:
+                pass
             outcome["err"] = exc
 
     worker = threading.Thread(target=_do, daemon=True)
