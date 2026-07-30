@@ -228,7 +228,21 @@ same file twice into duplicate notes. Run one watcher at a time.
   account numbers, contract amounts) — tag or quarantine for review before they're broadly searchable.
 - **Vault backup strategy.** Migrations already zip the vault; formalize a scheduled backup
   (the `vault_backup_*.zip` files are gitignored and pile up — prune or rotate).
-- **Vault dedup cleanup.** ~4 genuine duplicate-content notes exist; a small script could fold them.
+- **Vault dedup cleanup.** ✅ DONE 2026-07-31 via `migrate_dedupe_notes.py` (backup → dry-run →
+  `--execute`). The estimate of "~4 duplicates" was well short: 23 title-collision groups covering
+  51 notes. **20 folded, 15 renamed, 231 notes remain.** Three things the work turned up:
+  - A title group can hold *both* duplicates and distinct documents, so clustering has to happen
+    **within** each group. One 견적서 group was 1 bundle of 119,298 chars plus 3 near-identical
+    내역서; folding the group wholesale would have destroyed real material.
+  - A fixed similarity threshold misjudges short notes, where a few characters swing the ratio.
+    Notes sharing the **same `source` file** fold at a lower bar (0.90), since the same file cannot
+    produce two revisions.
+  - Notes are referenced by `[[wikilinks]]`. Keeping the *linked* member of each cluster meant
+    zero links needed rewriting; deleting naively would have broken 2 silently.
+- **Index must mirror the vault.** ✅ DONE 2026-07-31. `ingest` previously only added and updated,
+  never removed, so notes deleted or renamed by hand lingered in the index forever and the bot
+  cited notes that no longer existed (4 such ghosts had accumulated). It now prunes rows whose note
+  is gone from the vault.
 - **Disk hygiene.** ✅ DONE 2026-07-08 — removed ~61GB of unused Ollama models with owner's OK
   (gemma4:26b/e4b, codestral, qwen2.5:14b, qwen3.5, mistral-nemo, nomic-embed-text). Kept the
   three the pipeline uses: `exaone3.5:7.8b`, `bge-m3`, `llama3.1`.

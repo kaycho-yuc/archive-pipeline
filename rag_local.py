@@ -334,6 +334,17 @@ def ingest(reset: bool = False, verbose: bool = True) -> dict:
         if verbose:
             print(f"[{i}/{len(notes)}] {'갱신' if note.name in existing else '추가'} {note.name} ({len(chunks)}청크)")
 
+    # 볼트에서 사라진 노트의 청크를 지운다. 이게 없으면 손으로 지우거나 이름을 바꾼 노트가
+    # 인덱스에 영원히 남아, 봇이 '없는 노트'를 근거로 답하고 출처로 인용한다. 실제로 수동
+    # 정리 뒤 유령 4개가 쌓여 있었다. 색인은 볼트를 그대로 비추는 것이 맞다.
+    current = {n.name for n in notes}
+    removed = 0
+    for stale in sorted(set(existing) - current):
+        tbl.delete(f"note_name = {_sql_quote(stale)}")
+        removed += 1
+        if verbose:
+            print(f"제거 {stale} (볼트에 없음)")
+
     # 전문(FTS) 인덱스를 (재)생성한다. 하이브리드 검색(키워드+벡터)이 지번·'연면적' 같은
     # 정확한 용어를 잘 잡는다. FTS 는 정적이라 add 후 재생성이 필요한데, 여기(전체/주기 색인)
     # 에서 다시 만들어 index_note 로 들어온 새 노트도 다음 주기에 FTS 검색에 포함된다.
@@ -342,9 +353,11 @@ def ingest(reset: bool = False, verbose: bool = True) -> dict:
     except Exception:
         logger.warning("FTS 인덱스 생성 실패(벡터 검색으로 폴백)")
 
-    stats = {"added": added, "updated": updated, "skipped": skipped, "total": len(notes), "rows": tbl.count_rows()}
+    stats = {"added": added, "updated": updated, "skipped": skipped, "removed": removed,
+             "total": len(notes), "rows": tbl.count_rows()}
     if verbose:
-        print(f"\n색인 완료: 추가 {added}, 갱신 {updated}, 건너뜀 {skipped}, 노트 {len(notes)}, 청크행 {stats['rows']}")
+        print(f"\n색인 완료: 추가 {added}, 갱신 {updated}, 제거 {removed}, 건너뜀 {skipped}, "
+              f"노트 {len(notes)}, 청크행 {stats['rows']}")
     return stats
 
 

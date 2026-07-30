@@ -100,6 +100,24 @@ def test_index_note_embed_failure_preserves_index(vault, monkeypatch):
     assert rag_local.connect().count_rows() == before  # 기존 인덱스 보존
 
 
+def test_ingest_prunes_notes_deleted_from_vault(vault):
+    """볼트에서 지운 노트는 인덱스에서도 빠져야 한다.
+
+    안 그러면 봇이 존재하지 않는 노트를 근거로 답하고 출처로 인용한다."""
+    rag_local.ingest(reset=True, verbose=False)
+    before = rag_local.connect().count_rows()
+
+    (vault / "운동일지.md").unlink()
+    stats = rag_local.ingest(reset=False, verbose=False)
+
+    assert stats["removed"] == 1
+    tbl = rag_local.connect()
+    assert tbl.count_rows() < before
+    names = {r["note_name"] for r in tbl.search().limit(999).to_list()}
+    assert "운동일지.md" not in names
+    assert "허가서.md" in names  # 남은 노트는 건드리지 않는다
+
+
 def test_embed_rejects_count_mismatch(monkeypatch):
     """벡터가 입력보다 적으면 청크와 어긋나 검색이 조용히 망가진다 — 크게 실패해야 한다."""
     monkeypatch.setattr(rag_local, "EMBED_PROVIDER", "gemini")
