@@ -89,28 +89,34 @@ machine-local `.env` (gitignored — no other machine's `.env` or behavior chang
   watcher — classified in about 1.5s each, filed correctly, originals archived. Vault 267 → 270.
 - **Tests:** 69 passing (was 61). The suite makes **no network calls**; verified by blanking
   `GEMINI_API_KEY` and re-running.
-- **RAG is off** (`RAG_BACKEND=off`), so the Telegram bot is not running. Building it on cloud
-  backends is the next work item, not a gap to be filled by another machine.
+- **Cloud RAG and the Telegram bot are live on n100** (added 2026-07-30). `rag_local` gained the
+  same env-keyed dispatcher treatment: `RAG_EMBED_PROVIDER` / `RAG_GEN_PROVIDER`, defaults still
+  `ollama`. Indexed **251 notes / 2172 chunks in 165s** with `gemini-embedding-001` (3072-dim);
+  answers come from `gemini-3.1-flash-lite` in 1.4–2.3s with correct citations. Only
+  `95_Templates`, 3 root system notes and `91_임시메모` are outside `INCLUDE_DIRS`.
+- **Three traps found by running it, all now guarded in code:** the embedding API rejects batches
+  over 100; `gemini-embedding-2` silently returns one vector for many inputs; and an uncapped
+  thinking budget made answers take 37–119s. See `ROADMAP.md` decision log.
+- **`TELEGRAM_CHAT_ID` had been set to the bot's own id** (`8974535690` = @archive_pipeline_bot),
+  so the bot read messages and answered nobody, and failure alerts went nowhere. Corrected to the
+  owner's account (`300683554`, @dosaim).
+- **Cosmetic, not fixed:** `send_message` sends plain text with no `parse_mode`, and Gemini emits
+  far more markdown than EXAONE did, so `**bold**` shows up literally in Telegram.
 
 ## Pending / next steps
-1. **Cloud RAG on n100, so the Telegram bot works here.** `rag_local.py` has exactly two
-   model-dependent boundaries — `embed()` and the `_client.chat` call inside `answer()` — so it
-   takes the same env-keyed dispatcher treatment `classify.py` already got. Watch out: `EMBED_DIM`
-   (1024, bge-m3) is baked into the LanceDB schema, so switching embedders needs a rebuilt index
-   and a **loud** dimension-mismatch check rather than a silent one. Available embedding models on
-   this key: `gemini-embedding-001` (2048 input tokens), `gemini-embedding-2` (8192),
-   `gemini-embedding-2-preview`. Confirm output dimensionality by calling it, don't assume.
-2. **Pick the answer model by measurement, not by spec sheet** — compare `gemini-3.5-flash-lite`
-   against `gemini-3.5-flash` on real vault questions using `bench_models.py`. The same approach
-   is what rejected 3.5 Flash Lite for the classifier.
-3. **Telegram credentials.** `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` are blank in n100's `.env`;
-   the values live on STRX-D75. Everything up to and including indexing works without them.
-4. **Separate company RAG on STRX-D75** — planned, out of scope for this repo.
-5. Everything previously listed in ROADMAP (project-scoped RAG, reranker, Docling for native-PDF
+1. **Owner to confirm the bot answers from their phone.** Verified through the code path here, but
+   the chat-id fix landed after their last attempt, so a real round trip is still unconfirmed.
+2. **Optional: strip or convert markdown before sending to Telegram**, or set `parse_mode`. Cosmetic
+   only — see the note above.
+3. **Separate company RAG on STRX-D75** — planned, out of scope for this repo.
+4. Everything previously listed in ROADMAP (project-scoped RAG, reranker, Docling for native-PDF
    tables, vault dedup cleanup) is unchanged by this session — see `ROADMAP.md` for full detail.
 
 ## Quick resume checklist
 - `git branch --show-current` → `n100-cloud-backends` (or `main` once merged).
+- On n100, confirm `.env` has `RAG_BACKEND=local`, `RAG_EMBED_PROVIDER=gemini`,
+  `RAG_GEN_PROVIDER=gemini`, `RAG_EMBED_DIM=3072`, and a `TELEGRAM_CHAT_ID` that is the **owner's**
+  account, not the bot's own id.
 - On n100, confirm `.env` has `LLM_PROVIDER=gemini`, `GEMINI_MODEL=gemini-3.1-flash-lite`,
   `OCR_PROVIDER=gemini`, `RAG_BACKEND=off`. The backend switch is `.env` only — gitignored, so it
   never shows up in `git status`.

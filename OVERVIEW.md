@@ -67,10 +67,12 @@ into the RAG right after filing (hourly full re-index as backstop).
 Hardware: i9-14900KF / 64GB RAM / RTX 4080 (16GB). Python 3.13 on Windows 11.
 
 > **Cloud-backed mode:** on hardware that can't host a local model (e.g. an integrated-graphics
-> mini PC), `LLM_PROVIDER=gemini` and `OCR_PROVIDER=gemini` swap the classifier and scan OCR for
-> cloud calls, selected per-machine via that machine's own `.env`. The stack above is what runs
+> mini PC), every model-dependent step has a cloud counterpart selected per-machine via that
+> machine's own `.env` — `LLM_PROVIDER` (classify), `OCR_PROVIDER` (scan OCR), and
+> `RAG_EMBED_PROVIDER` / `RAG_GEN_PROVIDER` (retrieval and answers). The stack above is what runs
 > when a GPU is available; this mode is what makes the same pipeline viable without one. As of
-> 2026-07-29 the owner's personal instance runs in this mode on an N100 mini PC.
+> 2026-07-30 the owner's personal instance runs fully in this mode on an N100 mini PC, Telegram
+> bot included.
 
 ## A few decisions worth stealing
 
