@@ -94,10 +94,12 @@ def ask_knowledge_base(question: str) -> str:
 
 
 def _ask_local(question: str) -> str:
-    """로컬 RAG(LanceDB+bge-m3)로 검색·생성한다."""
+    """로컬 RAG 인덱스로 검색·생성한다(백엔드는 rag_local 이 고른다)."""
     import rag_local  # 지연 임포트: openwebui 백엔드만 쓸 때 lancedb 로딩 회피
 
-    answer, names = rag_local.answer(question, model=MODEL)
+    # 모델을 여기서 넘기지 않는다. rag_local 이 RAG_GEN_PROVIDER 에 맞는 모델을 이미 고르며,
+    # Ollama 용 이름(TELEGRAM_RAG_MODEL)을 gemini 백엔드에 넘기면 없는 모델로 실패한다.
+    answer, names = rag_local.answer(question)
     answer = _strip_thinking(answer)
     if not answer:
         return "답을 만들지 못했습니다. 질문을 바꿔 다시 시도해 주세요."
@@ -160,12 +162,21 @@ def _required_config() -> list[tuple[str, str]]:
     return req
 
 
+def _effective_model() -> str:
+    """기동 로그에 실제로 쓰이는 모델을 남긴다(백엔드에 따라 다르다)."""
+    if RAG_BACKEND == "local":
+        import rag_local
+
+        return f"{rag_local.GEN_PROVIDER}/{rag_local.GEN_MODEL}"
+    return MODEL
+
+
 def main() -> None:
     missing = [n for n, v in _required_config() if not v]
     if missing:
         raise SystemExit(f".env 에 다음 값이 필요합니다: {', '.join(missing)}")
 
-    logger.info("텔레그램 봇 시작 (허가 chat_id=%s, 모델=%s)", ALLOWED_CHAT_ID, MODEL)
+    logger.info("텔레그램 봇 시작 (허가 chat_id=%s, 모델=%s)", ALLOWED_CHAT_ID, _effective_model())
     offset = 0
     backoff = 0.0
     while True:

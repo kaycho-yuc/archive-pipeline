@@ -1,9 +1,11 @@
 # Archive Pipeline — Overview
 
-A personal, **fully on-device** "second brain" for an architect/BIM manager who deals with a lot
+A personal, **local-first** "second brain" for an architect/BIM manager who deals with a lot
 of Korean construction paperwork. Drop a document in a folder → it gets read (even scanned/Hangul),
 classified, and filed as a tagged Obsidian note → then you can ask questions about everything in
-Korean, from your phone. No cloud, no data leaving the machine.
+Korean, from your phone. The default and primary deployment runs fully on-device (no cloud LLM,
+no data leaving the machine); a cloud-backed mode (same pipeline, cloud classifier/OCR) is
+available for hardware that can't host a local model.
 
 > For the curious: deeper docs are `ROADMAP.md` (the why + what's next) and `SYSTEM-HANDOFF.md`
 > (as-built technical detail). This file is the 5-minute tour.
@@ -47,7 +49,7 @@ Everything runs as one Windows Task Scheduler job (watcher + resource monitor + 
 each a daemon thread) that starts on boot. ~236 notes currently indexed. New notes are auto-indexed
 into the RAG right after filing (hourly full re-index as backstop).
 
-## Stack (all local)
+## Stack (local by default)
 
 | Layer | Tool |
 |---|---|
@@ -63,6 +65,14 @@ into the RAG right after filing (hourly full re-index as backstop).
 | Notes | Obsidian (iCloud-synced), YAML frontmatter |
 
 Hardware: i9-14900KF / 64GB RAM / RTX 4080 (16GB). Python 3.13 on Windows 11.
+
+> **Cloud-backed mode:** on hardware that can't host a local model (e.g. an integrated-graphics
+> mini PC), every model-dependent step has a cloud counterpart selected per-machine via that
+> machine's own `.env` — `LLM_PROVIDER` (classify), `OCR_PROVIDER` (scan OCR), and
+> `RAG_EMBED_PROVIDER` / `RAG_GEN_PROVIDER` (retrieval and answers). The stack above is what runs
+> when a GPU is available; this mode is what makes the same pipeline viable without one. As of
+> 2026-07-30 the owner's personal instance runs fully in this mode on an N100 mini PC, Telegram
+> bot included.
 
 ## A few decisions worth stealing
 

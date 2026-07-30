@@ -2,7 +2,9 @@
 
 import io
 import logging
+import os
 import re
+import unicodedata
 import xml.etree.ElementTree as ET
 import zipfile
 from contextlib import closing
@@ -11,7 +13,14 @@ from pathlib import Path
 import fitz  # PyMuPDF: 스캔 PDF를 이미지로 렌더링해 OCR 하기 위함
 import pdfplumber
 import pytesseract
+from dotenv import load_dotenv
 from PIL import Image, ImageOps
+
+# 이 모듈이 pipeline 의 load_dotenv() 보다 먼저 임포트되므로 여기서 직접 .env 를 읽는다
+# (classify.py 와 같은 이유). 안 그러면 OCR_PROVIDER 등이 기본값으로 떨어진다.
+load_dotenv()
+
+logger = logging.getLogger("archive_pipeline")
 
 PDF_EXTENSIONS = {".pdf"}
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".tiff", ".tif"}
@@ -40,6 +49,18 @@ SUPPORTED_EXTENSIONS = (
 
 OCR_LANGUAGES = "kor+eng"
 
+# OCR 백엔드: tesseract(로컬 설치 필요, 기본) 또는 gemini(클라우드, Tesseract 없는 저사양 PC용).
+# .env 의 OCR_PROVIDER 로 머신별로 고른다 — STRX-D75 는 기본값 그대로 Tesseract 를 쓴다.
+OCR_PROVIDER = os.getenv("OCR_PROVIDER", "tesseract").lower()
+# 스캔 OCR 은 분류보다 비전 성능이 중요해 분류용(GEMINI_MODEL)과 따로 고른다.
+GEMINI_OCR_MODEL = os.getenv("GEMINI_OCR_MODEL", "gemini-3.5-flash-lite")
+# 페이지마다 API 를 1회 호출하므로, 무인 운영 중 수백 장짜리 스캔 하나가 요금을
+# 폭주시키지 않도록 상한을 둔다. 넘으면 앞쪽 페이지까지만 읽고 경고를 남긴다.
+GEMINI_OCR_MAX_PAGES = int(os.getenv("GEMINI_OCR_MAX_PAGES", "30"))
+# 한 페이지 전사는 분류용 JSON 보다 훨씬 길다. 상한을 안 주면 API 기본값에서 조용히 잘리고,
+# 잘린 줄이 '문서 전체'로 넘어간다. 넉넉히 잡되, 그래도 잘리면 아래에서 예외로 올린다.
+OCR_MAX_OUTPUT_TOKENS = int(os.getenv("GEMINI_OCR_MAX_OUTPUT_TOKENS", "8192"))
+
 # pyhwp 가 내부적으로 남기는 경고 로그를 줄인다.
 logging.getLogger("hwp5").setLevel(logging.ERROR)
 
@@ -48,6 +69,13 @@ _HWPX_SECTION = re.compile(r"Contents/section\d+\.xml$", re.IGNORECASE)
 
 # 임베드 텍스트가 이 길이 미만이면 스캔 PDF로 보고 OCR 로 폴백한다.
 MIN_PDF_TEXT_CHARS = 50
+
+# 서브셋 글꼴이 글리프를 유니코드 사설영역(PUA)에 매핑하고 ToUnicode 표를 안 넣으면,
+# 추출기가 글자 대신 원본 글리프 코드(U+F639 등)를 돌려준다 — 숫자가 통째로 사라진다.
+# 서로 다른 PUA 코드가 여러 개면 '본문이 그 글꼴로 그려졌다'는 신호다. 반대로 장식용
+# 구분선처럼 같은 글리프만 반복되는 정상 문서는 distinct 가 1이라 걸리지 않는다
+# (실제 볼트에서 확인: 레시피 노트 9종 = 손상, 견적서 구분선 1종 x98 = 정상).
+MIN_DISTINCT_PUA = 5
 
 # OCR 렌더링 해상도. 높을수록 정확하지만 느리고 메모리를 더 쓴다.
 PDF_OCR_DPI = 300
@@ -72,29 +100,120 @@ def _ocr_scanned_page(image: Image.Image) -> str:
     return pytesseract.image_to_string(binary, lang=OCR_LANGUAGES, config=PDF_OCR_CONFIG)
 
 
+_gemini = None
+
+
+def _gemini_client():
+    """google-genai 클라이언트를 최초 1회만 생성해 캐시한다(모듈 import 시엔 안 만든다)."""
+    global _gemini
+    if _gemini is None:
+        from google import genai  # tesseract 전용 머신엔 없을 수 있어 지연 import
+
+        api_key = os.getenv("GEMINI_API_KEY", "").strip()
+        if not api_key:
+            raise ValueError("GEMINI_API_KEY 가 비어 있습니다(.env 에 발급 키를 넣으세요).")
+        _gemini = genai.Client(api_key=api_key)
+    return _gemini
+
+
+# 요약·번역·추측을 금지해야 한다. 모델이 '읽어서 정리'하기 시작하면 지번·금액 같은
+# 원문 값이 조용히 바뀌어, 이 도메인에서 가장 위험한 종류의 오류가 된다.
+GEMINI_OCR_PROMPT = (
+    "이 이미지는 한국어 문서를 스캔한 것입니다. 보이는 모든 글자를 원문 그대로 옮겨 적으세요. "
+    "표는 줄바꿈과 탭으로 구조를 유지하세요. 요약·설명·번역·추측을 하지 말고, 읽을 수 없는 "
+    "글자는 생략하세요. 글자가 없으면 빈 문자열만 출력하세요."
+)
+
+
+def _gemini_ocr_page(image: Image.Image) -> str:
+    """스캔 페이지 이미지를 Gemini 비전 모델로 전사한다(전처리 없이 원본 렌더 그대로).
+
+    Tesseract 와 달리 이진화하지 않는다 — 비전 모델은 원본 계조에서 더 정확하다."""
+    from google.genai import types
+
+    buffer = io.BytesIO()
+    image.save(buffer, format="PNG")
+    response = _gemini_client().models.generate_content(
+        model=GEMINI_OCR_MODEL,
+        contents=[
+            types.Part.from_bytes(data=buffer.getvalue(), mime_type="image/png"),
+            GEMINI_OCR_PROMPT,
+        ],
+        config=types.GenerateContentConfig(
+            temperature=0.0,
+            max_output_tokens=OCR_MAX_OUTPUT_TOKENS,
+            thinking_config=types.ThinkingConfig(thinking_level="minimal"),
+        ),
+    )
+    # 잘린 응답을 조용히 받아들이면 페이지 중간에서 끊긴 주소·금액이 '전부'로 둔갑한다.
+    # 이 도메인에서 가장 위험한 실패라, 잘렸으면 예외로 올려 격리·알림에 걸리게 한다.
+    candidate = (response.candidates or [None])[0]
+    finish = getattr(candidate, "finish_reason", None)
+    if getattr(finish, "name", str(finish)) == "MAX_TOKENS":
+        raise ValueError(
+            f"OCR 응답이 잘렸습니다(max_output_tokens={OCR_MAX_OUTPUT_TOKENS}). "
+            "페이지가 너무 조밀하면 GEMINI_OCR_MAX_OUTPUT_TOKENS 를 올리세요."
+        )
+    return (response.text or "").strip()
+
+
+def _ocr_page(image: Image.Image) -> str:
+    """OCR_PROVIDER 에 따라 tesseract(로컬)/gemini(클라우드) 백엔드로 분기한다."""
+    if OCR_PROVIDER == "gemini":
+        return _gemini_ocr_page(image)
+    return _ocr_scanned_page(image)
+
+
 def _pdf_ocr_text(file_path: Path) -> str:
     """PDF 각 페이지를 이미지로 렌더링한 뒤 전처리·OCR 해 텍스트를 뽑는다."""
     pages = []
     with fitz.open(file_path) as doc:
-        for page in doc:
+        # gemini 백엔드는 페이지당 API 호출 1회라 상한을 둔다(로컬 tesseract 는 무제한).
+        limit = GEMINI_OCR_MAX_PAGES if OCR_PROVIDER == "gemini" else len(doc)
+        for index, page in enumerate(doc):
+            if index >= limit:
+                logger.warning(
+                    "OCR 페이지 상한(%d) 초과, 앞 %d쪽까지만 읽음: %s (전체 %d쪽)",
+                    limit, limit, file_path.name, len(doc),
+                )
+                break
             pix = page.get_pixmap(dpi=PDF_OCR_DPI)
             with Image.open(io.BytesIO(pix.tobytes("png"))) as image:
-                pages.append(_ocr_scanned_page(image))
+                pages.append(_ocr_page(image))
     return "\n".join(pages).strip()
 
 
+def _has_unmapped_glyphs(text: str) -> bool:
+    """사설영역(PUA) 문자가 여러 종류 섞여 있으면 임베드 텍스트를 믿을 수 없다는 뜻."""
+    return len({c for c in text if unicodedata.category(c) == "Co"}) >= MIN_DISTINCT_PUA
+
+
 def extract_pdf_text(file_path: Path) -> str:
-    """임베드 텍스트를 우선 추출하고, 비어 있으면(스캔 PDF) OCR 로 폴백한다."""
+    """임베드 텍스트를 우선 추출하고, 비어 있거나(스캔 PDF) 깨졌으면 OCR 로 폴백한다."""
     text = _pdf_embedded_text(file_path)
-    if len(text) >= MIN_PDF_TEXT_CHARS:
+    garbled = _has_unmapped_glyphs(text)
+    if garbled:
+        # 페이지를 이미지로 읽으면 글꼴 인코딩과 무관하게 보이는 대로 숫자를 얻는다.
+        logger.warning("임베드 텍스트가 글꼴 서브셋으로 깨져 OCR 로 다시 읽음: %s", file_path.name)
+    elif len(text) >= MIN_PDF_TEXT_CHARS:
         return text
 
+    # OCR 실패는 삼키지 않는다. 이 분기까지 왔다는 건 임베드 텍스트가 이미 50자 미만이라는
+    # 뜻이라, 폴백해봐야 페이지번호·워터마크 몇 글자를 '문서 전체'로 분류하게 된다. 무인
+    # 운영 머신에서 그건 조용한 오분류가 되므로, 예외를 그대로 올려 _failed 격리 + 알림에
+    # 걸리게 한다(사람이 다시 넣으면 된다). OCR 이 '빈 결과'를 준 경우는 예외가 아니므로
+    # 아래 비교에서 기존 임베드 텍스트가 그대로 살아남는다.
     ocr_text = _pdf_ocr_text(file_path)
+    if garbled:
+        # 깨진 임베드 텍스트는 길이만 길다. 더 짧아도 값이 살아 있는 OCR 결과가 낫다.
+        return ocr_text or text
     return ocr_text if len(ocr_text) > len(text) else text
 
 
 def extract_image_text(file_path: Path) -> str:
     with Image.open(file_path) as image:
+        if OCR_PROVIDER == "gemini":
+            return _gemini_ocr_page(image)
         return pytesseract.image_to_string(image, lang=OCR_LANGUAGES).strip()
 
 

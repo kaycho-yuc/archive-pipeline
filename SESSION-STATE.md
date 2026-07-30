@@ -1,122 +1,131 @@
-# Session State — local RAG migration, answer-quality fixes, cleanup
+# Session State — pipeline moves to n100 as a personal-use system (cloud classifier + cloud OCR)
 
-> Working handoff so context survives a `/clear` or a new session. Created 2026-07-08.
-> Branch: **`add-xml-and-activate-office-extractors`** (NOT merged to main yet — 15 commits ahead
-> since the previous handoff below).
+> Working handoff so context survives a `/clear` or a new session. Created 2026-07-29.
+> Branch: **`n100-cloud-backends`**. The previous session's branch (`add-xml-and-activate-office-extractors`) is
+> merged (`b41b073`), plus three follow-on commits landed on main since: `58db357` (selectable
+> Gemini backend for classifier), `7d7225e` (Gemini `thinking_level` fix), `ad5bb7e` (gitignore for
+> local `vault/`/`.agents/`). That whole previous handoff (local RAG migration, answer-quality
+> fixes, cleanup) is resolved and superseded — see git history if needed, not repeated here.
 > Companion context: `README.md`, `OVERVIEW.md`, `SYSTEM-HANDOFF.md`, `ROADMAP.md` (all updated
-> this session), and assistant memory (`local-rag-default`, `openwebui-embedder-english-only`,
-> `docker-upgrade-wipes-kb`, `icloud-move-hang`).
->
-> The previous handoff below this line (file-format support / .msg recovery / iCloud resilience)
-> is **resolved and superseded** — kept for git-blame continuity only. Its OPEN ITEM (.msg
-> attachment recovery) is done: 22 `source_email:` backlinks now exist in the vault.
+> this session).
 
 ## Why this session happened
-Owner shared an external architecture review of `README.md` (Docling/PaddleOCR, dynamic project
-classification, Open WebUI alternatives). Verified it against the actual code, found it partly
-right/partly wrong, then executed the validated plan end-to-end, plus follow-on bug fixes the
-owner caught by actually using the bot.
+STRX-D75 (the RTX 4080 box that runs Ollama) was unavailable, but document extraction still needed
+to run, so the pipeline was stood up on **n100-win** (hostname `NUCBOXG2`, an Intel N100 mini PC —
+4 cores, 11.7GB RAM, integrated graphics, no Ollama, no Tesseract). A local LLM on that hardware
+was measured and ruled out: a 4B-class model would take roughly 2 to 4 minutes per document there,
+and small models drop fields on Korean structured JSON extraction, versus about 1.5 seconds via a
+cloud API. So n100 runs the **same repo**, with the cloud backend selected purely through its own
+machine-local `.env` (gitignored — no other machine's `.env` or behavior changes).
 
-## What changed (all committed on the branch, oldest → newest)
-1. **`a3a9f26`** — Fixed `watch.log` growing to **267GB**: `telegram_bot.py`'s `getUpdates` retry
-   loop had no backoff, so a DNS hiccup made it spin instantly, writing a full traceback per
-   iteration. Added exponential backoff (5s→60s) + `RotatingFileHandler` in `run_watch.py` so this
-   class of bug can never fill the disk again.
-2. **`854bbba`** — Found Open WebUI's RAG was silently embedding the Korean vault with
-   **all-MiniLM-L6-v2 (English-only)**, not bge-m3 as README/skill assumed. Corrected docs.
-3. **`13cf418`** — **Track 3: replaced Open WebUI/Docker RAG with local in-process RAG.** New
-   `rag_local.py`: bge-m3 (via Ollama) embeddings into a file-based **LanceDB** index (`rag_db/`,
-   gitignored). `telegram_bot.py` gained `RAG_BACKEND` (`local` default / `openwebui` fallback).
-   `ingest_vault.py` gained `--backend local|openwebui`. Removes a whole failure class (Open WebUI
-   silently going down; Docker upgrades previously wiped the KB — see `docker-upgrade-wipes-kb`
-   memory) and fixes the Korean-recall problem from #2.
-4. **`d4cab12`** — Auto-index: `pipeline.process_file` calls `rag_local.index_note()`
-   (best-effort, non-fatal) right after writing a note. `watch.py` runs an hourly incremental
-   full re-ingest backstop (`RAG_REINGEST_INTERVAL`) to catch notes made during a `pause_ai`
-   window or hand-edited/renamed vault notes the watcher never sees.
-5. **`28adfa7`** — **Track 1: dynamic project detection.** `classify.detect_project()` assigns
-   `project` per work note from deterministic identifiers (lot numbers/addresses) instead of a
-   single hardcoded default. Registry = `.env DEFAULT_WORK_PROJECT`/`PROJECT_IDENTIFIERS` +
-   optional `WORK_PROJECTS` JSON for a 2nd+ project. `migrate_add_project.py` rewritten to
-   re-derive `project` from each note's `source` filename (dry-run today = 0 changes, safe).
-6. **`6b22d84`** — **Track 2: evaluated Docling/PaddleOCR/EasyOCR as Tesseract replacements —
-   rejected.** EasyOCR fixed a header-doubling glitch but **misread lot-number digits**
-   (685-317→685-377) — dangerous for this domain. PaddleOCR hit a paddle CPU backend bug on this
-   Windows/Py3.13 box; Docling's transformers import crashed in an isolated venv (and its real
-   value is native-PDF tables, not scan OCR anyway). Kept Tesseract. No production dependency
-   changes; eval was done in throwaway venvs under the scratch temp dir.
-7. **`af4affe`** — **Fixed 3 bugs that broke bot answers** (found by the owner testing live):
-   - `num_ctx=8192` made `exaone3.5:7.8b` return 1-character replies in this Ollama build →
-     reverted to the model's native 4096.
-   - `chunk_text` never hard-split oversized paragraphs, so ungapped scan-OCR text became single
-     4000+ char chunks; 8 of them (~33k chars) blew the context window and truncated away the
-     answer. Now hard-splits at `CHUNK_CHARS=700`; vault re-chunked 520→2044 chunks.
-   - One note could monopolize top-k, crowding out the note with the actual answer. Added
-     `MAX_CHUNKS_PER_NOTE` + `CONTEXT_CHAR_BUDGET`. Citations now list only notes actually used.
-8. **`a093c49`** — **Phase 8 answer grounding.** Each note's clean `## 요약` (written at
-   classify-time) is stored (`summary` column) and prepended per-note at answer time — so facts
-   (floor areas, dates, amounts) survive garbled scan OCR even when the raw chunk is noisy.
-9. **`faf819d`** — **Phase 8 hybrid search.** `rag_local.search()` now does LanceDB hybrid
-   retrieval (full-text + vector, RRF-fused; falls back to vector-only if no FTS index). Fixes
-   ranking for lot-number/proper-noun queries the embedding alone blurred. Lowered answer
-   generation `temperature` to 0.3 for factual consistency.
-10. **`ed3c3e8`** — QoL: `pause_ai.bat`/`resume_ai.bat` double-click wrappers; richer bot
-    `/start`/`/help` with concrete example questions.
-11. **`4faeeb9`** — Brought `OVERVIEW.md`/`SYSTEM-HANDOFF.md` up to date (both still described
-    Open WebUI/Docker as current; `SYSTEM-HANDOFF.md` even listed RAG as "not yet built").
-12. **`049ecfe`** — Trimmed `bench_models.py`'s model list (referenced 2 now-deleted models).
-13. Disk cleanup (not a commit — infra action): removed **~61GB** of unused Ollama models
-    (`gemma4:26b` [the one that previously froze the PC by overflowing 16GB VRAM], `gemma4:e4b`,
-    `codestral`, `qwen2.5:14b`, `mistral-nemo`, `qwen3.5`, `nomic-embed-text`) with owner's
-    explicit approval. Kept `exaone3.5:7.8b`, `bge-m3`, `llama3.1` — the three the pipeline uses.
+**Mid-session the scope changed, and this is now the standing plan (decided 2026-07-29):**
+- **This repo is the owner's personal-use pipeline, and n100 is its permanent home** — not a
+  temporary stand-in. STRX-D75 is no longer expected to run it.
+- **Company/client material gets its own separate RAG on STRX-D75**, to be built later. That system
+  is out of scope for this repo.
+- Input stays the shared iCloud `_inbox` and notes stay in the existing `KC_second_brain` vault.
+  The owner explicitly accepts that company documents they drop in for scheduling/study purposes
+  will be sent to the cloud API by this pipeline. A separate company vault comes later.
+- **The Telegram bot will run on n100 with cloud embeddings + cloud answers.** Not built yet; see
+  "Pending" below. Note this means the whole vault, including existing `10_Professional` notes,
+  gets embedded through the cloud API once — flagged to and accepted by the owner.
 
-Interleaved ROADMAP-only commits (`f78165a`, `7e615b8`, `717e43d`, `6b22d84`, `730ffea`) recorded
-each of the above as it landed — ROADMAP.md is current, treat it as authoritative for backlog.
+## What changed (uncommitted as of this session — see below)
+1. **Classifier model pin.** `.env` on n100 uses `LLM_PROVIDER=gemini`,
+   `GEMINI_MODEL=gemini-3.1-flash-lite` (the GA name; previously pinned to the preview build
+   `gemini-3.1-flash-lite-preview`, which Google can retire without notice — GA behaves
+   identically).
+2. **Gemini 3.5 Flash Lite evaluated and REJECTED for the classifier.** A 10-run A/B at
+   temperature 0 on the owner's real documents: `3.1-flash-lite` produced 10/10 identical titles;
+   `3.5-flash-lite` produced 9/10, and twice emitted categories outside the controlled `DOC_TYPES`
+   vocabulary (기록지, 기타), plus chose 체크리스트 for a training log. `category` becomes the note
+   filename, so drift there fragments the vault. Pricing runs the same direction: 3.5 Flash Lite
+   is $0.30 in / $2.50 out per 1M tokens vs $0.25 / $1.50 for 3.1 Flash Lite. Lesson: newer and
+   pricier lost to older on a heavily tuned instruction-following prompt.
+3. **Cloud OCR added to `extractors/extract.py`** (new capability, needed because n100 has no
+   Tesseract): env-keyed OCR backend, `OCR_PROVIDER=tesseract` (default — STRX-D75 untouched) or
+   `gemini`. The Gemini path renders PDF pages with PyMuPDF and sends them to a vision model for
+   verbatim transcription, with **no binarization** (that preprocessing helps Tesseract but hurts
+   vision models). Settings: `GEMINI_OCR_MODEL` (default `gemini-3.5-flash-lite`, chosen for its
+   stronger vision evals, ~87.4% on OCR) and `GEMINI_OCR_MAX_PAGES` (default 30, a cost cap since
+   each page is one API call). Verified on a synthetic Korean 대수선 허가필증 scan with no embedded
+   text: every critical value transcribed exactly, including `685-317`, `성수동1가`, `1,247.85 ㎡`,
+   `852,300,000`, `2018년 11월 29일`, `영진건설` — notable because ROADMAP already records EasyOCR
+   misreading exactly these lot-number digits (`685-317` as `685-377`). The OCR call caps
+   `max_output_tokens` and **raises on a truncated response** (`finish_reason=MAX_TOKENS`) rather
+   than accepting a half-transcribed page as complete — silently changed values are this domain's
+   worst failure. An OCR failure is **not** salvaged with leftover embedded text: by construction
+   that text is already under the 50-char threshold, so falling back would classify a page number
+   or watermark as the whole document. The exception propagates to `_failed` + Telegram instead.
+   Finally, **embedded text with several distinct Private Use Area codepoints is treated as
+   garbled and re-read via OCR.** A subset font with no `ToUnicode` table makes the extractor
+   return raw glyph codes, which silently ate every number in the nutrition box and step list of a
+   recipe PDF. Rendering the page and reading it visually sidesteps the font encoding entirely.
+   The threshold counts *distinct* codepoints (`MIN_DISTINCT_PUA=5`) so a decorative divider that
+   repeats one glyph 98 times — as the 영진 견적서 does — never triggers a needless full OCR.
+4. **Bug fix in `pipeline._move_to`** (affects both machines — STRX-D75 gets it next pull).
+   Archiving was silently stranding every file. Root cause: `os.rename` out of an iCloud-synced
+   folder to a folder outside the sync root is intercepted by the Windows cloud filter driver,
+   stalls 60 seconds, then fails with `WinError 426` (`ERROR_CLOUD_FILE_REQUEST_TIMEOUT`).
+   `shutil.move`'s copy fallback only runs after that stall, but `_move_to`'s 20-second watchdog
+   kills the worker first, so the file was retried forever every sweep. Fixed by using
+   `shutil.copy2` + `os.unlink` and never attempting rename: same operation, 0.02 seconds. Full
+   write-up: `learnings/2026-07-29-icloud-rename-winerror-426.md`.
+5. **RAG turned off on this machine.** `.env` sets `RAG_BACKEND=off` because `rag_local.py`
+   embeds with bge-m3 through Ollama, which can't run on the N100. Both call sites
+   (`pipeline._index_note_best_effort` and `watch._reingest_rag_backstop`) already treat any
+   non-`"local"` value as "skip", so no code change was needed for this.
+6. **Autostart registered on n100.** Scheduled task `ArchivePipelineWatch` runs
+   `.venv\Scripts\pythonw.exe run_watch.py` from the repo. Three deliberate differences from
+   STRX-D75's task: trigger is **at logon, not at boot** (iCloud Drive is per-user; a session-0
+   boot task only ever sees placeholders it can't hydrate), `ExecutionTimeLimit` is **unlimited**
+   (the 3-day default would kill a long-running watcher), and `MultipleInstances IgnoreNew`
+   prevents a second watcher stacking on the same inbox. Verified running against the live inbox;
+   the Telegram bot skips itself (blank token) and the resource monitor degrades cleanly with no
+   nvidia-smi and no Ollama present.
 
-## Current state (verified 2026-07-08, end of session)
-- **Tests:** `uv run pytest -q` → **61 passed**.
-- **Watcher process:** running, PID **86020**, started manually this session (`Start-Process
-  pythonw.exe run_watch.py`) — **not** via the Scheduled Task, so `Get-ScheduledTask
-  ArchivePipelineWatch` shows `Ready` (idle/registered) rather than `Running`; that's expected —
-  the task only fires at boot. On next reboot it'll launch fresh and pick up all changes on this
-  branch automatically (no action needed).
-- **Ollama:** responding (200), 4 models loaded (see #13 above), VRAM ~8/16GB used.
-- **RAG index:** `rag_db/` (LanceDB, ~20MB), 236 notes / ~2044 chunks, hybrid FTS+vector.
-  `RAG_BACKEND` unset in `.env` → defaults to `local`.
-- **Bot verified live** by the owner mid-session; multiple real Korean queries (permit dates,
-  counterparties, floor areas, workout summaries) answered correctly with citations.
-- **Untracked scratch files from an *earlier* (already-merged-in-spirit) session still sit in the
-  repo root:** `_recover_msg.py`, `_retry_cycle.py`, `xmlextractorchanges.patch`. Not touched this
-  session (out of scope); safe to delete once confirmed unneeded — they predate and are unrelated
-  to this session's work (the patch was already applied back in commit `4e6267b`).
+## Current state (verified 2026-07-29, end of session)
+- **Verified end to end on n100:** two workout logs and one recipe PDF processed through the live
+  watcher — classified in about 1.5s each, filed correctly, originals archived. Vault 267 → 270.
+- **Tests:** 69 passing (was 61). The suite makes **no network calls**; verified by blanking
+  `GEMINI_API_KEY` and re-running.
+- **Cloud RAG and the Telegram bot are live on n100** (added 2026-07-30). `rag_local` gained the
+  same env-keyed dispatcher treatment: `RAG_EMBED_PROVIDER` / `RAG_GEN_PROVIDER`, defaults still
+  `ollama`. Indexed **251 notes / 2172 chunks in 165s** with `gemini-embedding-001` (3072-dim);
+  answers come from `gemini-3.1-flash-lite` in 1.4–2.3s with correct citations. Only
+  `95_Templates`, 3 root system notes and `91_임시메모` are outside `INCLUDE_DIRS`.
+- **Three traps found by running it, all now guarded in code:** the embedding API rejects batches
+  over 100; `gemini-embedding-2` silently returns one vector for many inputs; and an uncapped
+  thinking budget made answers take 37–119s. See `ROADMAP.md` decision log.
+- **`TELEGRAM_CHAT_ID` had been set to the bot's own id** (`8974535690` = @archive_pipeline_bot),
+  so the bot read messages and answered nobody, and failure alerts went nowhere. Corrected to the
+  owner's account (`300683554`, @dosaim).
+- **Cosmetic, not fixed:** `send_message` sends plain text with no `parse_mode`, and Gemini emits
+  far more markdown than EXAONE did, so `**bold**` shows up literally in Telegram.
 
-## Known remaining weak spot (not a bug — a small-model reasoning limit)
-Asking for a *computed delta* like "증축 **후** 연면적" (floor area *after* expansion) sometimes
-gets a hedge ("not explicitly stated") even though the permit's `연면적합계` value **is** in the
-grounded context — `exaone3.5:7.8b` won't confidently equate "stated total" with "after" phrasing
-100% of the time. Rephrasing more directly (e.g. "허가서 연면적 합계는?") gets a clean answer.
-Not worth chasing further without a bigger model or a reranker (see ROADMAP Phase 8 — now marked
-optional).
-
-## Pending / optional next steps (see `ROADMAP.md` for full detail)
-1. **Project-scoped RAG** — filter `rag_local` search by the `project` column once a 2nd project
-   exists (`WORK_PROJECTS` in `.env`, then `migrate_add_project.py --execute`).
-2. **Reranker** (cross-encoder) — only if hybrid search (already shipped) proves insufficient;
-   adds a torch/transformers dependency weight, so treat as last resort.
-3. **Docling for native-PDF tables** (내역서/견적서) — re-evaluate in a *clean* env (pin
-   `transformers`, install outside a temp dir); never route Korean *scans* through a
-   digit-misreading OCR engine (see item 6 above — EasyOCR/PaddleOCR both rejected for scans).
-4. **Vault dedup cleanup** (~4 genuine duplicate notes) — destructive, needs owner review first.
-5. **Merge to main** — branch is stable (61 tests, live-verified), 15 commits ahead. Ready for a
-   PR whenever the owner wants to open one.
-6. Delete the 3 leftover scratch files above, once confirmed unneeded.
+## Pending / next steps
+1. **Owner to confirm the bot answers from their phone.** Verified through the code path here, but
+   the chat-id fix landed after their last attempt, so a real round trip is still unconfirmed.
+2. **Optional: strip or convert markdown before sending to Telegram**, or set `parse_mode`. Cosmetic
+   only — see the note above.
+3. **Separate company RAG on STRX-D75** — planned, out of scope for this repo.
+4. Everything previously listed in ROADMAP (project-scoped RAG, reranker, Docling for native-PDF
+   tables, vault dedup cleanup) is unchanged by this session — see `ROADMAP.md` for full detail.
 
 ## Quick resume checklist
-- `git branch --show-current` → should be `add-xml-and-activate-office-extractors`.
-- `uv run pytest -q` → 61 pass.
-- `(Get-CimInstance Win32_Process -Filter "Name='pythonw.exe'").ProcessId` → watcher alive (or
-  restart: `Get-CimInstance Win32_Process -Filter "Name='pythonw.exe'" | Stop-Process -Force`
-  then `Start-Process .venv\Scripts\pythonw.exe run_watch.py`).
-- Sanity-check RAG: `uv run python -c "import rag_local; print(rag_local.answer('685-317 도급계약 상대 회사는?'))"`
-  should mention 영진건설/한스에이엔디.
+- `git branch --show-current` → `n100-cloud-backends` (or `main` once merged).
+- On n100, confirm `.env` has `RAG_BACKEND=local`, `RAG_EMBED_PROVIDER=gemini`,
+  `RAG_GEN_PROVIDER=gemini`, `RAG_EMBED_DIM=3072`, and a `TELEGRAM_CHAT_ID` that is the **owner's**
+  account, not the bot's own id.
+- On n100, confirm `.env` has `LLM_PROVIDER=gemini`, `GEMINI_MODEL=gemini-3.1-flash-lite`,
+  `OCR_PROVIDER=gemini`, `RAG_BACKEND=off`. The backend switch is `.env` only — gitignored, so it
+  never shows up in `git status`.
+- `uv run pytest -q` → 69 pass.
+- `uv run pytest -q` → 65 pass.
+- On n100, `Get-ScheduledTask ArchivePipelineWatch` → `Running`. When STRX-D75 comes back, stop and
+  disable it so only one machine watches the shared inbox.
+- **After changing any pipeline code, restart the task** (`Stop-ScheduledTask` then
+  `Start-ScheduledTask`). The watcher holds the code it imported at startup, so an edited file has
+  no effect until then. This bit us once: a fix was verified green in tests while the live watcher
+  quietly kept producing the broken output.
 - `/my-vault` in Claude Code for a guided health check + menu.

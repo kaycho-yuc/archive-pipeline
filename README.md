@@ -51,14 +51,35 @@ ARCHIVE_DIR=_archive            # iCloud 밖(용량 절약)
 OBSIDIAN_VAULT_PATH_WIN=C:\Users\OWNER\iCloudDrive\iCloud~md~obsidian\KC_second_brain
 OLLAMA_HOST=127.0.0.1:11434     # 머신 환경변수(0.0.0.0)는 건드리지 않고 코드에서 강제
 OLLAMA_MODEL=llama3.1           # 분류·요약용
+LLM_PROVIDER=ollama             # 분류 백엔드. ollama(기본, 로컬) 또는 gemini(클라우드)
+GEMINI_API_KEY=...              # LLM_PROVIDER 또는 OCR_PROVIDER 가 gemini일 때 필요
+GEMINI_MODEL=gemini-3.1-flash-lite  # LLM_PROVIDER=gemini일 때 분류 모델
+OCR_PROVIDER=tesseract          # 스캔 OCR 백엔드. tesseract(기본, 로컬) 또는 gemini(클라우드)
+GEMINI_OCR_MODEL=gemini-3.5-flash-lite  # OCR_PROVIDER=gemini일 때 OCR 모델
+GEMINI_OCR_MAX_PAGES=30         # 문서당 OCR 호출할 최대 페이지 수(비용 상한)
 DEFAULT_WORK_PROJECT=성수동 리모델링  # 업무 노트 frontmatter의 project 기본값
 TELEGRAM_BOT_TOKEN=...          # 알림 + 봇
 TELEGRAM_CHAT_ID=...            # 봇이 응답할 (본인) 채팅 ID
 OPENWEBUI_URL=http://127.0.0.1:3000
 OPENWEBUI_API_KEY=...           # Open WebUI → 설정 → 계정 → API 키
 OPENWEBUI_KB_ID=...             # 지식베이스 ID
-TELEGRAM_RAG_MODEL=exaone3.5:7.8b   # 봇 답변 모델(벤치마크로 선정)
+TELEGRAM_RAG_MODEL=exaone3.5:7.8b   # 봇 답변 모델(Ollama 백엔드일 때)
+RAG_EMBED_PROVIDER=ollama       # 임베딩 백엔드. ollama(기본) 또는 gemini(클라우드)
+RAG_GEN_PROVIDER=ollama         # 답변 백엔드. ollama(기본) 또는 gemini(클라우드)
+RAG_EMBED_MODEL=bge-m3          # gemini 면 gemini-embedding-001
+RAG_EMBED_DIM=1024              # bge-m3=1024, gemini-embedding-001=3072
+RAG_GEN_MODEL=gemini-3.1-flash-lite  # RAG_GEN_PROVIDER=gemini 일 때 답변 모델
 ```
+
+> **Ollama/Tesseract 없는 머신에서 돌리기:** `LLM_PROVIDER=gemini` + `OCR_PROVIDER=gemini`로
+> 설정하면 Ollama도 Tesseract도 설치되지 않은 머신(예: 내장 그래픽 미니PC)에서도 **수집 경로**
+> (추출 → 분류 → 노트 → 아카이브)가 그대로 동작한다. `.env`는 머신마다 로컬이라(git 제외) 이
+> 설정을 바꿔도 다른 머신엔 영향 없다.
+>
+> **RAG·텔레그램 봇도 클라우드로 돌아간다:** `RAG_EMBED_PROVIDER=gemini` +
+> `RAG_GEN_PROVIDER=gemini` 로 두면 Ollama 없이도 볼트 색인과 봇 답변이 동작한다. 임베딩 모델을
+> 바꾸면 벡터 차원이 달라지므로 `RAG_EMBED_DIM` 을 맞추고 `--reset` 으로 재색인해야 한다
+> (안 맞으면 색인 전에 오류로 잡힌다).
 
 ## 실행
 
