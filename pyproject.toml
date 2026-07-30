@@ -20,6 +20,7 @@ dependencies = [
     "openpyxl",
     "python-docx",
     "lancedb>=0.34.0",
+    "mcp>=2.0.0",
 ]
 
 [dependency-groups]

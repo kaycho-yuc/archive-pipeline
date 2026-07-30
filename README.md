@@ -125,6 +125,45 @@ powershell -ExecutionPolicy Bypass -File pause_ai.ps1    # 멈추고 ~9GB RAM + 
 powershell -ExecutionPolicy Bypass -File resume_ai.ps1   # 다시 켜기
 ```
 
+## 에이전트에서 볼트 읽기 (MCP)
+
+`mcp_server.py` 가 볼트를 Claude Code 같은 에이전트에 도구로 노출한다. 목적은 **에이전트가 볼트
+파일을 직접 뒤지지 않게** 하는 것이다. 볼트 전체는 약 467,000토큰, 검색 한 번은 약 700토큰이다.
+
+| 도구 | 용도 | 비용 |
+|---|---|---|
+| `search_vault` | 관련 조각 찾기(먼저 이걸 쓴다) | 약 700토큰 |
+| `ask_vault` | 근거 기반 답변 + 출처 | 약 300토큰 |
+| `list_notes` | 조건에 맞는 제목만 훑기 | 수십~수백 토큰 |
+| `get_note` | 노트 전문(꼭 필요할 때만) | 약 1,900토큰 |
+| `vault_status` | 볼트 규모·최근 수정 확인 | 미미 |
+
+**등록은 저장소 단위로 한다.** 전역(user scope)으로 걸면 볼트와 무관한 세션에서도 서버가 뜬다.
+이 저장소에는 `.mcp.json` 이 들어 있어 여기서 작업할 때 자동으로 잡힌다. 다른 저장소에 붙이려면
+그 폴더에서:
+
+```powershell
+# 이 저장소 안에서만 쓰이는 등록(남과 공유 안 함)
+claude mcp add vault --scope local -- uv run --directory C:\Users\Indion\repos\archive-pipeline python mcp_server.py
+
+# 팀·다른 기기와 공유할 저장소면 .mcp.json 을 커밋(--scope project)
+claude mcp add vault --scope project -- uv run --directory C:\Users\Indion\repos\archive-pipeline python mcp_server.py
+```
+
+맥 등 다른 기기에서는 n100 의 서버를 SSH stdio 로 부른다(포트를 열지 않는다):
+
+```bash
+claude mcp add vault --scope local -- ssh n100-win "cd /c/Users/Indion/repos/archive-pipeline && uv run python mcp_server.py"
+```
+
+등록 확인·해제는 `claude mcp list`, `claude mcp remove vault`.
+
+> **왜 전역 등록을 피하나:** 도구 정의 자체는 약 210토큰으로 가볍지만, 서버가 뜰 때마다
+> `rag_local`(lancedb+pyarrow) 임포트에 이 머신 기준 **10초·89MB** 가 든다. 그래서
+> `list_notes`/`get_note`/`vault_status` 는 파일시스템만 써서 그 비용을 아예 내지 않고,
+> 검색 계열 도구를 실제로 호출할 때만 지연 임포트한다. 그래도 무관한 프로젝트에 굳이
+> 붙여둘 이유는 없다. 즉석 질문은 텔레그램 봇이 더 싸다(Claude 토큰 0).
+
 ## 테스트
 
 ```powershell

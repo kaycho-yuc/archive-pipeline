@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "vault": {
+      "command": "uv",
+      "args": ["run", "python", "mcp_server.py"]
+    }
+  }
+}
