@@ -20,6 +20,7 @@ import hashlib
 import logging
 import os
 import re
+import time
 from pathlib import Path
 
 import lancedb
@@ -31,9 +32,25 @@ load_dotenv()
 
 logger = logging.getLogger("archive_pipeline")
 
-EMBED_MODEL = os.getenv("RAG_EMBED_MODEL", "bge-m3")
-EMBED_DIM = 1024  # bge-m3 출력 차원
-GEN_MODEL = os.getenv("TELEGRAM_RAG_MODEL", "exaone3.5:7.8b")
+# 임베딩·답변 백엔드: ollama(로컬, GPU 있는 머신) 또는 gemini(클라우드, Ollama 없는 머신).
+# 분류기(classify.py)와 같은 방식으로 .env 에서 머신별로 고른다.
+EMBED_PROVIDER = os.getenv("RAG_EMBED_PROVIDER", "ollama").lower()
+GEN_PROVIDER = os.getenv("RAG_GEN_PROVIDER", "ollama").lower()
+
+if EMBED_PROVIDER == "gemini":
+    EMBED_MODEL = os.getenv("RAG_EMBED_MODEL", "gemini-embedding-001")
+    EMBED_DIM = int(os.getenv("RAG_EMBED_DIM", "3072"))  # gemini-embedding-001/2 출력 차원
+else:
+    EMBED_MODEL = os.getenv("RAG_EMBED_MODEL", "bge-m3")
+    EMBED_DIM = int(os.getenv("RAG_EMBED_DIM", "1024"))  # bge-m3 출력 차원
+
+GEN_MODEL = (
+    os.getenv("RAG_GEN_MODEL", "gemini-3.1-flash-lite")
+    if GEN_PROVIDER == "gemini"
+    else os.getenv("TELEGRAM_RAG_MODEL", "exaone3.5:7.8b")
+)
+GEN_THINKING_LEVEL = os.getenv("RAG_GEN_THINKING", "minimal")
+GEN_RETRIES = 3  # 일시적 503(모델 혼잡)에 대비. 대화형이라 실패가 곧 무응답이다.
 DB_PATH = Path(os.getenv("RAG_DB_PATH", "rag_db"))
 TABLE_NAME = "vault"
 
@@ -53,11 +70,107 @@ if _host.startswith(("0.0.0.0", "http://0.0.0.0", "https://0.0.0.0")):
 _client = ollama.Client(host=_host)
 
 
+_gemini = None
+
+
+def _gemini_client():
+    """google-genai 클라이언트를 최초 1회만 생성해 캐시한다(모듈 import 시엔 안 만든다)."""
+    global _gemini
+    if _gemini is None:
+        from google import genai  # ollama 전용 머신엔 없을 수 있어 지연 import
+
+        api_key = os.getenv("GEMINI_API_KEY", "").strip()
+        if not api_key:
+            raise ValueError("GEMINI_API_KEY 가 비어 있습니다(.env 에 발급 키를 넣으세요).")
+        _gemini = genai.Client(api_key=api_key)
+    return _gemini
+
+
+# API 제한: 한 요청에 최대 100건. 볼트 전체 색인은 수천 청크라 반드시 나눠 보내야 한다.
+GEMINI_EMBED_BATCH = 100
+
+
+def _embed_gemini(texts: list[str]) -> list[list[float]]:
+    """Gemini 임베딩. 100건씩 나눠 보내고, 개수가 어긋나면 그 묶음만 1건씩 재시도한다."""
+    from google.genai import types
+
+    config = types.EmbedContentConfig(task_type="RETRIEVAL_DOCUMENT")
+    client = _gemini_client()
+    vectors: list[list[float]] = []
+    for start in range(0, len(texts), GEMINI_EMBED_BATCH):
+        batch = texts[start : start + GEMINI_EMBED_BATCH]
+        response = client.models.embed_content(
+            model=EMBED_MODEL, contents=batch, config=config
+        )
+        got = [e.values for e in response.embeddings]
+        if len(got) != len(batch):
+            # gemini-embedding-2 는 입력 여러 개를 줘도 오류 없이 벡터 1개만 돌려준다.
+            # 그대로 쓰면 청크와 벡터가 어긋나 검색이 조용히 망가지므로 1건씩 다시 부른다.
+            got = [
+                client.models.embed_content(model=EMBED_MODEL, contents=t, config=config)
+                .embeddings[0]
+                .values
+                for t in batch
+            ]
+        vectors.extend(got)
+    return vectors
+
+
 def embed(texts: list[str]) -> list[list[float]]:
-    """텍스트 목록을 bge-m3 로 임베딩한다(한 번의 배치 호출)."""
+    """텍스트 목록을 임베딩한다. RAG_EMBED_PROVIDER 로 백엔드를 고른다."""
     if not texts:
         return []
-    return _client.embed(model=EMBED_MODEL, input=texts)["embeddings"]
+    if EMBED_PROVIDER == "gemini":
+        vectors = _embed_gemini(texts)
+    else:
+        vectors = _client.embed(model=EMBED_MODEL, input=texts)["embeddings"]
+
+    # 개수·차원이 어긋나면 인덱스가 조용히 망가진다. 여기서 크게 실패시킨다.
+    if len(vectors) != len(texts):
+        raise ValueError(f"임베딩 개수 불일치: 입력 {len(texts)}개, 결과 {len(vectors)}개")
+    if vectors and len(vectors[0]) != EMBED_DIM:
+        raise ValueError(
+            f"임베딩 차원 불일치: 스키마 {EMBED_DIM}, 모델 {EMBED_MODEL} 출력 {len(vectors[0])}. "
+            "모델을 바꿨다면 RAG_EMBED_DIM 을 맞추고 인덱스를 재생성하세요(--reset)."
+        )
+    return vectors
+
+
+def _generate(prompt: str, model: str) -> str:
+    """RAG 답변 생성. RAG_GEN_PROVIDER 로 백엔드를 고른다.
+
+    낮은 temperature: 사실 질의라 창의성보다 일관·정확한 값 추출이 중요하다."""
+    if GEN_PROVIDER == "gemini":
+        from google.genai import types
+
+        config = types.GenerateContentConfig(
+            temperature=0.3,
+            # 근거가 이미 검색돼 프롬프트에 들어 있어 추론을 길게 돌릴 이유가 없다. 안 막으면
+            # 모델에 따라 답 하나에 30~120초가 걸려 대화형 봇으로 못 쓴다(실측).
+            thinking_config=types.ThinkingConfig(thinking_level=GEN_THINKING_LEVEL),
+        )
+        last: Exception | None = None
+        for attempt in range(GEN_RETRIES):
+            try:
+                response = _gemini_client().models.generate_content(
+                    model=model, contents=prompt, config=config
+                )
+                return (response.text or "").strip()
+            except Exception as error:  # noqa: BLE001 — 재시도 후 호출부로 전달
+                last = error
+                # 봇은 대화형이라 한 번의 일시적 503 이 곧 '답이 안 옴'이다(수집 경로와 달리
+                # 나중에 자동 재시도되지 않는다). 짧게 물러났다 다시 시도한다.
+                if attempt < GEN_RETRIES - 1:
+                    time.sleep(2 * (attempt + 1))
+        raise last
+
+    resp = _client.chat(
+        model=model,
+        messages=[{"role": "user", "content": prompt}],
+        stream=False,
+        options={"num_ctx": GEN_NUM_CTX, "temperature": 0.3},
+    )
+    return (resp.get("message") or {}).get("content", "").strip()
 
 
 def _sha256(text: str) -> str:
@@ -348,14 +461,7 @@ def answer(question: str, k: int = DEFAULT_K, model: str | None = None) -> tuple
         "등 값이 노트에 있으면 반드시 찾아 제시하라. 정말 관련 근거가 없을 때만 모른다고 답하라.\n\n"
         f"# 검색된 노트\n{context}\n\n# 질문\n{question}\n"
     )
-    resp = _client.chat(
-        model=model or GEN_MODEL,
-        messages=[{"role": "user", "content": prompt}],
-        stream=False,
-        # 낮은 temperature: 사실 질의라 창의성보다 일관·정확한 값 추출이 중요하다.
-        options={"num_ctx": GEN_NUM_CTX, "temperature": 0.3},
-    )
-    ans = (resp.get("message") or {}).get("content", "").strip()
+    ans = _generate(prompt, model or GEN_MODEL)
     names: list[str] = []
     for h in picked:  # 실제로 문맥에 넣은 노트만 출처로 표기(정직한 인용)
         if h["note_name"] not in names:
