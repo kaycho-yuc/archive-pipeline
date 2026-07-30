@@ -68,6 +68,20 @@ _inbox/ (iCloud)  ──감시/스윕──►  process_file()
   - **HWP** (`.hwp`, 한글 v5 바이너리/OLE): `pyhwp`의 `TextTransform`을 BytesIO로 받아 디코딩.
   - **HWPX** (`.hwpx`, 한글 OWPML zip+xml): zipfile로 `Contents/section*.xml`을 열어 네임스페이스 무시하고 `t`(텍스트 런) 요소만 수집.
 - **한국어 스캔 OCR 핵심**: `kor+eng` + 그레이스케일 + autocontrast + **이진화(임계값 150)** + `--psm 6`. 이진화 없이는 한국어 인식률이 매우 낮음.
+- **OCR 백엔드 선택(`OCR_PROVIDER`, 2026-07-29 추가)**: 기본 `tesseract`(로컬, 위 이진화 경로).
+  `gemini`로 설정하면 Tesseract가 없는 머신(예: N100 미니PC)에서도 동작 — PyMuPDF로 페이지를
+  렌더링해 비전 모델에 그대로 전달(비전 모델엔 이진화가 오히려 해로워 **전처리 생략**).
+  `GEMINI_OCR_MODEL`(기본 `gemini-3.5-flash-lite`), `GEMINI_OCR_MAX_PAGES`(기본 30, 비용 상한),
+  `GEMINI_OCR_MAX_OUTPUT_TOKENS`(기본 8192). 응답이 잘리면(`finish_reason=MAX_TOKENS`) 조용히
+  받지 않고 예외 — 페이지 중간에서 끊긴 주소·금액이 '전부'로 둔갑하는 걸 막는다.
+- **글꼴 서브셋 깨짐 감지(`MIN_DISTINCT_PUA=5`)**: 서브셋 글꼴이 ToUnicode 표 없이 글리프를
+  사설영역(PUA)에 매핑하면 추출기가 글자 대신 글리프 코드를 돌려준다(레시피 PDF 의 영양정보·
+  조리순서 숫자가 통째로 사라진 실제 사례). **서로 다른** PUA 코드가 5종 이상이면 임베드
+  텍스트를 버리고 OCR 로 다시 읽는다. 장식용 구분선처럼 같은 글리프만 반복되는 경우(견적서의
+  U+F000 x98)는 distinct 가 1이라 걸리지 않아, 멀쩡한 문서를 괜히 OCR 돌리지 않는다.
+- **OCR 실패는 폴백하지 않는다**: 이 분기까지 왔다는 건 임베드 텍스트가 이미 50자 미만이라,
+  폴백하면 페이지번호·워터마크 몇 글자를 문서 전체로 분류하게 된다. 예외를 그대로 올려
+  `_failed` 격리 + 알림에 걸리게 한다. (OCR 이 '빈 결과'를 준 경우는 예외가 아니라 기존 동작 유지.)
 
 ### `classifier/classify.py` — 로컬 LLM 분류 + 추출
 - Ollama 사용(분류 모델 `OLLAMA_MODEL`, 현재 **`exaone3.5:7.8b`** — 한국어 우수 + 봇과 모델 공유). **클라이언트 host를 코드에서 `127.0.0.1:11434`로 고정**.
@@ -76,6 +90,10 @@ _inbox/ (iCloud)  ──감시/스윕──►  process_file()
 - **제목은 `compose_title()`로 결정적 조립**: `YYYY-MM-DD <유형> - <상대방> (<부가, 상태>)`. LLM 이 제목 문자열을 직접 만들지 않음.
 - **kind**: 참고자료(빈 양식·샘플·정부지침/매뉴얼/사례집·다른 현장)는 봇에서 제외하기 위한 판정. 확실할 때만 참고자료, 애매하면 프로젝트자료(실데이터 보호).
 - 견고성: `MAX_INPUT_CHARS=4000`, 스키마 본문 뒤 재명시, `RETRY_TEMPERATURES=(0.0,0.4,0.8)`, domain 만 엄격 검증.
+- **분류 백엔드 선택(`LLM_PROVIDER`, 2026-07-29 추가)**: 기본 `ollama`(위 경로). `gemini`로 설정하면
+  Ollama가 없는 머신에서도 동작(`GEMINI_MODEL`, 기본 `gemini-3.1-flash-lite`). 3.5 Flash Lite는
+  10회 A/B에서 통제 어휘 밖 카테고리를 2회 출력해 **탈락**시켰다(제목은 3.1이 10/10, 3.5가 9/10
+  일치) — 근거는 `ROADMAP.md` 결정 기록 참고. `.env`는 머신별 로컬이라 이 설정은 머신마다 독립.
 
 ### `notes/write_note.py` — Obsidian 노트 작성 (볼트 스키마 v2 + 명명규칙)
 - 폴더 매핑: `업무→10_Professional`, `개인→20_Personal`, 그 외 `90_System`. 분기 폴더 `YYYY-QN`.
@@ -125,6 +143,12 @@ _inbox/ (iCloud)  ──감시/스윕──►  process_file()
 2. **iCloud 온라인 전용 placeholder 지연**: 다운로드되지 않은 파일을 만지면 watcher가 I/O에서 멈춘 것처럼 보일 수 있음(가짜 행). 격리 테스트로 추출/복사 자체는 빠름을 확인.
 3. **pyhwp 한계**: 일부 `.hwp`가 `OleStream ... propertySetStream` AttributeError → 우아하게 `_failed` 격리.
 4. **머신 환경변수 `OLLAMA_HOST=0.0.0.0`** 은 그대로 두되 코드에서 무력화함(머신 설정 보존 원칙).
+5. **iCloud 폴더 간 `os.rename` → `WinError 426`(2026-07-29 발견/수정)**: iCloud 동기화 폴더에서
+   동기화 범위 밖 폴더로 `os.rename` 하면 Windows 클라우드 필터 드라이버가 가로채 60초 멎었다가
+   `ERROR_CLOUD_FILE_REQUEST_TIMEOUT`로 실패한다. `shutil.move`의 복사 폴백은 그 60초 뒤에야
+   실행되는데 `_move_to`의 20초 워치독이 먼저 워커를 죽여, 아카이브가 매 스윕마다 무한 재시도되며
+   조용히 실패하고 있었다. `pipeline._move_to`를 `shutil.copy2` + `os.unlink`로 고쳐(rename 자체를
+   시도하지 않음) 해결 — 같은 동작이 0.02초. 전체 기록: `learnings/2026-07-29-icloud-rename-winerror-426.md`.
 
 ---
 

@@ -6,7 +6,7 @@
 > The original RAG vision is in [`archive-pipeline-handoff.md`](archive-pipeline-handoff.md).
 >
 > Owner: a non-programmer Korean architect / BIM manager. **Read "Working with the owner" below before making changes.**
-> Last updated: 2026-07-06.
+> Last updated: 2026-07-29.
 
 ---
 
@@ -92,6 +92,8 @@ scanned or in Hangul (HWP). Manually organizing and recalling this is slow. The 
 | RAG prompt **enforces grounding** (don't fall back to general knowledge) | A permissive prompt made the smart model ignore the notes and answer generically | Open WebUI `RAG_TEMPLATE` |
 | `TOP_K=10` | Owner felt answers referenced too few notes | Open WebUI config |
 | `project:` field = **deterministic default**, not LLM-guessed | All work is one project today; LLMs name it inconsistently. Deterministic now, add detection later | `notes/write_note.py` |
+| **Classifier: pin `gemini-3.1-flash-lite` (GA), REJECT `gemini-3.5-flash-lite` (2026-07-29)** | 10-run A/B at temperature 0 on real documents: 3.1 gave 10/10 identical titles; 3.5 gave 9/10 and twice emitted categories outside the controlled `DOC_TYPES` vocabulary (기록지, 기타), plus mis-picked 체크리스트 for a training log. `category` becomes the note filename, so drift there fragments the vault. Cheaper too ($0.25 in/$1.50 out vs $0.30/$2.50 per 1M tokens). **Lesson: newer and pricier lost to older on a heavily tuned instruction-following prompt.** | `classifier/classify.py`, `.env LLM_PROVIDER=gemini` |
+| **Cloud OCR (`OCR_PROVIDER=gemini`) added as a second scan-OCR route, alongside Tesseract (2026-07-29)** | Needed for machines with no Tesseract (see "Multi-machine operation" below). Renders pages with PyMuPDF and sends them to a vision model for verbatim transcription — **no binarization** (that preprocessing helps Tesseract but hurts vision models). Verified on the same 685-317 대수선 필증 scan that EasyOCR previously misread (`685-317`→`685-377`): Gemini transcribed every critical value exactly (lot number, area, amount, date, company name). This does **not** reverse the Track 2 rejection below — EasyOCR/PaddleOCR are still rejected for *local* digit misreads; this is a different, cloud vision route. | `extractors/extract.py` |
 
 ---
 
@@ -154,6 +156,12 @@ Ordered roughly by value-to-effort. Each is independent.
     (non-scanned) PDFs with real tables** (견적서/내역서 → markdown tables); revisit that in a
     clean env (pin `transformers`, install outside a temp dir), on-demand only, and never route
     Korean *scans* through a digit-misreading engine. Re-processing filed notes needs `_archive`.
+  - **Cloud OCR alternative (2026-07-29) — this does NOT reverse the rejection above.** Added
+    `OCR_PROVIDER=gemini` as a second route alongside Tesseract, for machines with no Tesseract
+    install (see "Multi-machine operation" below). It's a cloud vision model, not a local engine,
+    so the EasyOCR/PaddleOCR digit-misread problem doesn't apply the same way — verified on the
+    same 685-317 scan with every critical value transcribed exactly. Tesseract stays the default
+    everywhere it's available; this is an option for hardware that can't run it at all.
 
 ### Phase 8 — Smarter retrieval (local RAG follow-ups from the 2026-07-06 migration)
 > RAG is now in-process (`rag_local.py`: LanceDB + bge-m3). These items build on it.
@@ -192,6 +200,24 @@ Open WebUI is kept only as a fallback (`RAG_BACKEND=openwebui`). Once the local 
 drop the Docker dependency, simplify `run_watch.py` / `pause_ai.ps1` (no container to stop),
 update the `/my-vault` skill (Op1 health check no longer needs `docker ps`), and remove the
 `OPENWEBUI_*` config. Reclaims RAM and deletes an entire failure class.
+
+### Where this repo runs, and what it is for (decided 2026-07-29)
+**This repo is the owner's personal-use pipeline, and n100-win (`NUCBOXG2`, an Intel N100 mini PC
+with no Ollama and no Tesseract) is its permanent home.** It runs on cloud backends selected purely
+via that machine's own gitignored `.env` (`LLM_PROVIDER=gemini`, `OCR_PROVIDER=gemini`), so no other
+machine's configuration is touched. STRX-D75 is not expected to run this pipeline any more.
+
+**Company/client material gets a separate RAG on STRX-D75, built later and out of scope here.** The
+split is deliberate: personal material may go to a cloud API, company material should stay local on
+the GPU box. Two consequences the owner has explicitly accepted:
+- Input remains the shared iCloud `_inbox` and notes remain in `KC_second_brain`. Company documents
+  dropped in for scheduling/study purposes **will** be sent to the cloud API by this pipeline.
+- Turning the Telegram bot on here means embedding the whole vault, including the existing
+  `10_Professional` notes, through the cloud API once.
+
+If a second machine is ever pointed at the same inbox, note that `processed_hashes.json`,
+`_archive`, and `processing_log.csv` are per-machine, so two simultaneous watchers can process the
+same file twice into duplicate notes. Run one watcher at a time.
 
 ### Phase 9 — Safety & ops
 - **Sensitivity pre-flag.** Regex/heuristics to flag notes containing personal data (주민번호,

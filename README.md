@@ -51,6 +51,12 @@ ARCHIVE_DIR=_archive            # iCloud 밖(용량 절약)
 OBSIDIAN_VAULT_PATH_WIN=C:\Users\OWNER\iCloudDrive\iCloud~md~obsidian\KC_second_brain
 OLLAMA_HOST=127.0.0.1:11434     # 머신 환경변수(0.0.0.0)는 건드리지 않고 코드에서 강제
 OLLAMA_MODEL=llama3.1           # 분류·요약용
+LLM_PROVIDER=ollama             # 분류 백엔드. ollama(기본, 로컬) 또는 gemini(클라우드)
+GEMINI_API_KEY=...              # LLM_PROVIDER 또는 OCR_PROVIDER 가 gemini일 때 필요
+GEMINI_MODEL=gemini-3.1-flash-lite  # LLM_PROVIDER=gemini일 때 분류 모델
+OCR_PROVIDER=tesseract          # 스캔 OCR 백엔드. tesseract(기본, 로컬) 또는 gemini(클라우드)
+GEMINI_OCR_MODEL=gemini-3.5-flash-lite  # OCR_PROVIDER=gemini일 때 OCR 모델
+GEMINI_OCR_MAX_PAGES=30         # 문서당 OCR 호출할 최대 페이지 수(비용 상한)
 DEFAULT_WORK_PROJECT=성수동 리모델링  # 업무 노트 frontmatter의 project 기본값
 TELEGRAM_BOT_TOKEN=...          # 알림 + 봇
 TELEGRAM_CHAT_ID=...            # 봇이 응답할 (본인) 채팅 ID
@@ -59,6 +65,15 @@ OPENWEBUI_API_KEY=...           # Open WebUI → 설정 → 계정 → API 키
 OPENWEBUI_KB_ID=...             # 지식베이스 ID
 TELEGRAM_RAG_MODEL=exaone3.5:7.8b   # 봇 답변 모델(벤치마크로 선정)
 ```
+
+> **Ollama/Tesseract 없는 머신에서 돌리기:** `LLM_PROVIDER=gemini` + `OCR_PROVIDER=gemini`로
+> 설정하면 Ollama도 Tesseract도 설치되지 않은 머신(예: 내장 그래픽 미니PC)에서도 **수집 경로**
+> (추출 → 분류 → 노트 → 아카이브)가 그대로 동작한다. `.env`는 머신마다 로컬이라(git 제외) 이
+> 설정을 바꿔도 다른 머신엔 영향 없다.
+>
+> 다만 **RAG·텔레그램 봇은 아직 안 된다** — 임베딩(bge-m3)·답변 모델이 Ollama 위에서 돌기
+> 때문이다. 그런 머신에선 `RAG_BACKEND=off` 로 둔다. 임베딩·답변까지 클라우드로 돌리는 작업이
+> 다음 순서로 예정돼 있다(`ROADMAP.md` 참고).
 
 ## 실행
 
