@@ -15,7 +15,14 @@ Get-CimInstance Win32_Process -Filter "Name='pythonw.exe' OR Name='python.exe'" 
     ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
 
 # 3) Ollama 에 올라온 모델을 모두 내려 VRAM/RAM 즉시 회수 (가장 큰 효과).
-$loaded = (& ollama ps) | Select-Object -Skip 1
+# 클라우드 백엔드로 도는 머신엔 Ollama 가 없다. 없는데 부르면 빨간 오류가 쏟아져
+# (이 스크립트는 더블클릭용이다) 놀라게 되므로, 있을 때만 부른다.
+if (-not (Get-Command ollama -ErrorAction SilentlyContinue)) {
+    Write-Host "  [-] Ollama 없음(클라우드 백엔드 머신) — 건너뜀" -ForegroundColor DarkGray
+    $loaded = $null
+} else {
+    $loaded = (& ollama ps) | Select-Object -Skip 1
+}
 if ($loaded) {
     foreach ($line in $loaded) {
         $name = ($line -split '\s{2,}')[0].Trim()
@@ -24,14 +31,21 @@ if ($loaded) {
 } else { Write-Host "  [-] 로드된 모델 없음" -ForegroundColor DarkGray }
 
 # 4) Open WebUI 컨테이너 정지 (RAG 임베딩 호출도 멈춤). 데이터 볼륨은 보존된다.
-try {
-    docker stop open-webui 2>$null | Out-Null
-    Write-Host "  [O] Open WebUI 컨테이너 정지" -ForegroundColor Green
-} catch { Write-Host "  [-] Docker 미실행 또는 컨테이너 없음" -ForegroundColor DarkGray }
+# Ollama 와 같은 이유로 docker 유무를 먼저 확인한다(없는 머신에서 오류가 쏟아지지 않게).
+if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
+    Write-Host "  [-] Docker 없음 — 건너뜀" -ForegroundColor DarkGray
+} else {
+    try {
+        docker stop open-webui 2>$null | Out-Null
+        Write-Host "  [O] Open WebUI 컨테이너 정지" -ForegroundColor Green
+    } catch { Write-Host "  [-] Docker 미실행 또는 컨테이너 없음" -ForegroundColor DarkGray }
+}
 
 Start-Sleep -Seconds 2
 $os = Get-CimInstance Win32_OperatingSystem
-$gpu = (nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits 2>$null)
+$gpu = if (Get-Command nvidia-smi -ErrorAction SilentlyContinue) {
+    nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits 2>$null
+} else { "N/A" }  # 외장 GPU 없는 머신(N100 등)
 Write-Host ("완료. RAM 사용 {0:N1} GB / {1:N1} GB,  VRAM {2} MB" -f `
     (($os.TotalVisibleMemorySize-$os.FreePhysicalMemory)/1MB), ($os.TotalVisibleMemorySize/1MB), $gpu) -ForegroundColor Cyan
 Write-Host "Revit/Enscape 작업이 끝나면 resume_ai.ps1 로 다시 켜세요." -ForegroundColor Yellow

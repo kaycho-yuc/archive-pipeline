@@ -3,17 +3,23 @@
 Write-Host "AI 스택을 다시 시작합니다..." -ForegroundColor Cyan
 
 # 1) Docker 가 떠 있는지 확인하고, Open WebUI 컨테이너 시작.
-$dockerUp = $false
-try { docker info 2>$null | Out-Null; $dockerUp = $? } catch {}
-if (-not $dockerUp) {
-    Write-Host "  [..] Docker Desktop 기동 중..." -ForegroundColor DarkGray
-    Start-Process "C:\Program Files\Docker\Docker\Docker Desktop.exe"
-    for ($i=0; $i -lt 40; $i++) { Start-Sleep 3; try { docker info 2>$null | Out-Null; if ($?) { break } } catch {} }
+# Docker 가 아예 없는 머신(클라우드 백엔드로 도는 N100 등)에서는 통째로 건너뛴다.
+# 안 그러면 Docker Desktop 을 띄우려다 실패한 뒤 3초 x 40회, 2분을 기다린다.
+if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
+    Write-Host "  [-] Docker 없음 — 건너뜀(RAG 는 클라우드 백엔드 사용)" -ForegroundColor DarkGray
+} else {
+    $dockerUp = $false
+    try { docker info 2>$null | Out-Null; $dockerUp = $? } catch {}
+    if (-not $dockerUp) {
+        Write-Host "  [..] Docker Desktop 기동 중..." -ForegroundColor DarkGray
+        Start-Process "C:\Program Files\Docker\Docker\Docker Desktop.exe"
+        for ($i=0; $i -lt 40; $i++) { Start-Sleep 3; try { docker info 2>$null | Out-Null; if ($?) { break } } catch {} }
+    }
+    try {
+        docker start open-webui 2>$null | Out-Null
+        Write-Host "  [O] Open WebUI 컨테이너 시작" -ForegroundColor Green
+    } catch { Write-Host "  [-] 컨테이너 시작 실패 — Docker 상태 확인 필요" -ForegroundColor Yellow }
 }
-try {
-    docker start open-webui 2>$null | Out-Null
-    Write-Host "  [O] Open WebUI 컨테이너 시작" -ForegroundColor Green
-} catch { Write-Host "  [-] 컨테이너 시작 실패 — Docker 상태 확인 필요" -ForegroundColor Yellow }
 
 # 2) 파일 감시기(+리소스 모니터) 다시 시작.
 try {
