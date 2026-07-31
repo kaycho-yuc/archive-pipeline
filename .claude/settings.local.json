@@ -4,5 +4,8 @@
       "PowerShell(Test-Path *)",
       "Bash(uv run *)"
     ]
-  }
+  },
+  "enabledMcpjsonServers": [
+    "vault"
+  ]
 }
