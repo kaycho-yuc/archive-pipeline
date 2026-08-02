@@ -35,6 +35,7 @@ SAME_SOURCE_FOLD_AT = 0.90
 PLAN_FILE = Path("_dedupe_plan.json")
 # 출처 파일명 앞머리의 정리 번호(05_, 13., 1-1a_ 등)는 제목에 넣어도 의미가 없다.
 LEAD_NUM = re.compile(r"^[\d\-]+[a-z]?[._\s]+")
+RAW_HEADING = re.compile(r"^##\s*원문\s*$", re.M)
 
 
 def _body(path: Path) -> str:
@@ -46,18 +47,47 @@ def _body(path: Path) -> str:
     return re.sub(r"\s+", " ", raw).strip()
 
 
+def _raw_text(path: Path) -> str:
+    """'## 원문' 이후만 뽑아 _body() 와 같은 방식으로 공백을 정규화한다. 헤딩이 없으면
+    빈 문자열을 돌려준다(호출부가 _body() 전체로 대체한다).
+
+    출처가 같은 두 노트를 비교할 때 '## 요약' 까지 넣으면 안 된다 — 요약은 분류를 돌릴
+    때마다 새로 쓰이는 산출물이라, 같은 문서를 두 번 분류해도 문장이 달라진다. 그걸 포함해
+    비교하면 '같은 문서인가'가 아니라 '분류기가 이번엔 얼마나 다르게 요약했는가'를 재는
+    꼴이 된다."""
+    raw = path.read_text(encoding="utf-8", errors="ignore")
+    if raw.startswith("---"):
+        end = raw.find("\n---", 3)
+        if end != -1:
+            raw = raw[end + 4 :]
+    m = RAW_HEADING.search(raw)
+    if not m:
+        return ""
+    return re.sub(r"\s+", " ", raw[m.end() :]).strip()
+
+
 def _same_document(a: Path, b: Path, bodies: dict[Path, str]) -> bool:
     """두 노트가 사실상 같은 문서인가.
 
     유사도만 쓰면 짧은 노트에서 헛돈다 — 385자짜리에서 글자 몇 개만 달라도 비율이 크게
     떨어진다. 그래서 **출처 파일이 같으면** 기준을 낮춘다. 같은 파일에서 나온 거의 같은
-    노트는 개정판일 수 없고, 추출이 두 번 돈 결과다."""
+    노트는 개정판일 수 없고, 추출이 두 번 돈 결과다.
+
+    출처가 같을 때는 본문 전체가 아니라 '## 원문' 절만 비교한다. 요약은 분류기가 매번
+    새로 생성하는 산출물이라 같은 문서를 두 번 돌려도 달라지고, 그 노이즈가 노트가
+    짧을수록(요약이 본문에서 차지하는 비중이 클수록) 비율을 더 깎는다 — 결국 문서가
+    같은지가 아니라 분류기가 얼마나 다르게 썼는지를 재게 된다. 원문만 보면 이 노이즈가
+    빠져서 SAME_SOURCE_FOLD_AT(0.90) 이 진짜 기준이 된다."""
     ratio = SequenceMatcher(None, bodies[a], bodies[b]).ratio()
     if ratio >= FOLD_AT:
         return True
     src_a = mcp_server._frontmatter(a).get("source", "")
     src_b = mcp_server._frontmatter(b).get("source", "")
-    return bool(src_a) and src_a == src_b and ratio >= SAME_SOURCE_FOLD_AT
+    if not (bool(src_a) and src_a == src_b):
+        return False
+    raw_a = _raw_text(a) or bodies[a]
+    raw_b = _raw_text(b) or bodies[b]
+    return SequenceMatcher(None, raw_a, raw_b).ratio() >= SAME_SOURCE_FOLD_AT
 
 
 def _clusters(paths: list[Path], bodies: dict[Path, str]) -> list[list[Path]]:
@@ -73,14 +103,40 @@ def _clusters(paths: list[Path], bodies: dict[Path, str]) -> list[list[Path]]:
     return out
 
 
+def _norm_ident(s: str) -> str:
+    """비교용 정규화: 공백/밑줄/하이픈 제거(classifier/classify.py 의 동명 함수와 같은 발상.
+    의존을 만들지 않으려고 그대로 가져오지 않고 여기 따로 둔다)."""
+    return re.sub(r"[\s_\-]", "", s or "")
+
+
+def _category_matches_source(path: Path) -> bool:
+    """노트의 category 가 출처 파일명 안에 등장하는가(공백/_/- 는 무시하고 비교)."""
+    fm = mcp_server._frontmatter(path)
+    category, source = fm.get("category", ""), fm.get("source", "")
+    if not category or not source:
+        return False
+    return _norm_ident(category) in _norm_ident(source)
+
+
 def _keeper(cluster: list[Path], bodies: dict[Path, str], linked: set[str]) -> Path:
-    """묶음에서 남길 노트. 링크가 걸린 것 > 본문이 긴 것 > 이름에 -N 이 없는 것 순.
+    """묶음에서 남길 노트. 링크가 걸린 것 > 출처 파일명에 category 가 들어있는 것 >
+    본문이 긴 것 > 이름에 -N 이 없는 것 순.
 
     링크를 우선하는 이유: 남기는 쪽을 링크 대상과 맞추면 고칠 링크가 줄고,
-    Obsidian 그래프에서 기존 연결이 그대로 유지된다."""
+    Obsidian 그래프에서 기존 연결이 그대로 유지된다.
+
+    두 번째 기준(category)을 넣은 이유: 같은 문서를 두 번 분류했는데 category 가
+    서로 갈렸다면, 원본 파일명이 더 믿을 만한 증거다. 실제 사례: '골든구스 코리아
+    성수 하우스 임차의향서.pdf' 가 한 번은 `임차의향서`, 한 번은 `계약서`로 분류됐고,
+    본문 길이 기준만 쓰면 틀린 쪽(계약서)이 남는다."""
     return max(
         cluster,
-        key=lambda p: (p.stem in linked, len(bodies[p]), not SUFFIX.search(p.stem)),
+        key=lambda p: (
+            p.stem in linked,
+            _category_matches_source(p),
+            len(bodies[p]),
+            not SUFFIX.search(p.stem),
+        ),
     )
 
 
@@ -142,33 +198,61 @@ def _incoming_links() -> dict[str, list[Path]]:
     return refs
 
 
+def _fold(
+    paths: list[Path], bodies: dict[Path, str], linked: set[str]
+) -> tuple[list[list[Path]], list[Path], list[dict], set[Path]]:
+    """묶음(그룹) 안에서 클러스터링 -> 대표(keeper) 선정 -> 삭제 후보 생성까지.
+
+    제목 그룹핑과 출처 그룹핑이 이 로직을 그대로 공유한다. `protected` 에는 실제로
+    경쟁(접힘)이 있었던 대표만 담는다 — 경쟁 없이 혼자 남은 노트까지 보호 대상으로
+    치면, 다른 쪽 그룹핑이 찾아낸 진짜 중복을 못 지우게 막아버릴 수 있다."""
+    clusters = _clusters(paths, bodies)
+    keepers = [_keeper(c, bodies, linked) for c in clusters]
+    deletes: list[dict] = []
+    protected: set[Path] = set()
+    for cluster, keep in zip(clusters, keepers):
+        for p in cluster:
+            if p != keep:
+                deletes.append(
+                    {"path": str(p), "stem": p.stem, "merged_into": keep.stem,
+                     "chars": len(bodies[p])}
+                )
+                protected.add(keep)
+    return clusters, keepers, deletes, protected
+
+
 def build_plan() -> dict:
     notes = mcp_server._notes()
     refs = _incoming_links()
     linked = set(refs)
 
-    groups: dict[str, list[Path]] = defaultdict(list)
+    title_groups: dict[str, list[Path]] = defaultdict(list)
+    source_groups: dict[str, list[Path]] = defaultdict(list)
     for p in notes:
-        groups[SUFFIX.sub("", p.stem)].append(p)
+        title_groups[SUFFIX.sub("", p.stem)].append(p)
+        source = mcp_server._frontmatter(p).get("source", "")
+        if source:
+            source_groups[source].append(p)
 
-    deletes: list[dict] = []
+    bodies: dict[Path, str] = {}
+
+    def cache_bodies(paths: list[Path]) -> None:
+        for p in paths:
+            if p not in bodies:
+                bodies[p] = _body(p)
+
+    raw_deletes: list[dict] = []
     renames: list[dict] = []
-    for name, paths in sorted(groups.items()):
+    protected: set[Path] = set()
+
+    # 제목이 같은 그룹: 접기 + (묶음이 둘 이상, 즉 서로 다른 문서가 제목을 공유 중이면) 개명.
+    for name, paths in sorted(title_groups.items()):
         if len(paths) < 2:
             continue
-        bodies = {p: _body(p) for p in paths}
-        clusters = _clusters(paths, bodies)
-        keepers = []
-        for cluster in clusters:
-            keep = _keeper(cluster, bodies, linked)
-            keepers.append(keep)
-            for p in cluster:
-                if p != keep:
-                    deletes.append(
-                        {"path": str(p), "stem": p.stem, "merged_into": keep.stem,
-                         "chars": len(bodies[p])}
-                    )
-        # 묶음이 둘 이상 = 서로 다른 문서가 제목을 공유 중 -> 구분되게 개명한다.
+        cache_bodies(paths)
+        clusters, keepers, deletes, kept = _fold(paths, bodies, linked)
+        raw_deletes.extend(deletes)
+        protected |= kept
         if len(clusters) > 1:
             marks = _unique_disambiguators(keepers)
             for keep in keepers:
@@ -178,6 +262,38 @@ def build_plan() -> dict:
                         {"path": str(keep), "stem": keep.stem, "new_stem": new_stem,
                          "chars": len(bodies[keep])}
                     )
+
+    # 출처가 같은 그룹: 같은 원본이 두 번 처리돼 제목이 갈린 경우를 접는다(제목
+    # 그룹핑은 이걸 못 잡는다). 여기서는 개명하지 않는다 — 모인 노트들은 이미 서로
+    # 다른 제목이라 구분할 필요가 없다(예: 유사도가 낮은 주간운동리뷰 쌍은 클러스터가
+    # 둘로 갈라져 접히지 않고 그대로 둘 다 남는다).
+    for source, paths in sorted(source_groups.items()):
+        if len(paths) < 2:
+            continue
+        cache_bodies(paths)
+        _, _, deletes, kept = _fold(paths, bodies, linked)
+        raw_deletes.extend(deletes)
+        protected |= kept
+
+    # 두 그룹핑을 합친다. 규칙: (1) 어느 쪽에서든 실제로 경쟁에서 이긴 대표는 다른 쪽이
+    # 지우려 해도 지우지 않는다. (2) 같은 경로가 두 번 삭제 후보에 오르면 경로 자체와
+    # merged_into 값만으로 하나를 고른다(어느 그룹핑을 먼저 돌렸는지에 기대지 않으므로
+    # title/source 순서를 바꿔도 결과가 같다).
+    best: dict[str, dict] = {}
+    for d in raw_deletes:
+        if Path(d["path"]) in protected:
+            continue
+        prev = best.get(d["path"])
+        if prev is None or d["merged_into"] < prev["merged_into"]:
+            best[d["path"]] = d
+    deletes = sorted(best.values(), key=lambda d: d["path"])
+
+    best_r: dict[str, dict] = {}
+    for r in renames:
+        prev = best_r.get(r["path"])
+        if prev is None or r["new_stem"] < prev["new_stem"]:
+            best_r[r["path"]] = r
+    renames = sorted(best_r.values(), key=lambda r: r["path"])
 
     # 링크 갱신: 삭제된 노트는 살아남은 노트로, 개명된 노트는 새 이름으로 돌린다.
     remap = {d["stem"]: d["merged_into"] for d in deletes}
