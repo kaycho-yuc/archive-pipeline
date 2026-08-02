@@ -37,6 +37,7 @@ watch.py / run_once.py  # _inbox 상시 감시 / 일괄 처리
 run_watch.py            # 작업 스케줄러 진입점(감시기+모니터+봇 동시 기동)
 ingest_vault.py         # 볼트 .md 노트를 RAG 인덱스에 적재(기본 local, --backend openwebui 선택)
 bench_models.py         # 여러 LLM을 같은 RAG 질문으로 비교(모델 선택용)
+review_pending.py       # project 가 '미정'인 업무 노트를 사람이 확정(--fix) + 재색인
 migrate_*.py            # 볼트 구조/필드 마이그레이션(백업 → dry-run → --execute)
 pause_ai.ps1 / resume_ai.ps1  # Revit·Enscape 작업 전후로 RAM/VRAM 비우기/복구
 ```
@@ -57,7 +58,9 @@ GEMINI_MODEL=gemini-3.1-flash-lite  # LLM_PROVIDER=gemini일 때 분류 모델
 OCR_PROVIDER=tesseract          # 스캔 OCR 백엔드. tesseract(기본, 로컬) 또는 gemini(클라우드)
 GEMINI_OCR_MODEL=gemini-3.5-flash-lite  # OCR_PROVIDER=gemini일 때 OCR 모델
 GEMINI_OCR_MAX_PAGES=30         # 문서당 OCR 호출할 최대 페이지 수(비용 상한)
-DEFAULT_WORK_PROJECT=성수동 리모델링  # 업무 노트 frontmatter의 project 기본값
+DEFAULT_WORK_PROJECT=성수동 리모델링  # 레지스트리의 기본 프로젝트 이름(폴백 아님)
+PROJECT_IDENTIFIERS=685-317,685-383,성수동1가,성수동 리모델링  # 이 프로젝트를 가리키는 식별자
+WORK_PROJECTS=                  # 2번째 이상 프로젝트. 예: {"판교 오피스":["521-3"]}
 TELEGRAM_BOT_TOKEN=...          # 알림 + 봇
 TELEGRAM_CHAT_ID=...            # 봇이 응답할 (본인) 채팅 ID
 OPENWEBUI_URL=http://127.0.0.1:3000
@@ -104,7 +107,21 @@ uv run python run_watch.py
 # 볼트를 RAG 인덱스로 적재(최초 1회/노트 추가 후). 기본 백엔드는 로컬(LanceDB+bge-m3)
 uv run python ingest_vault.py            # 증분 색인
 uv run python ingest_vault.py --reset    # 전체 재색인
+
+# project 가 '미정'으로 남은 업무 노트를 확정
+uv run python review_pending.py          # 목록만
+uv run python review_pending.py --fix    # 하나씩 고르고 일괄 반영 + 재색인
 ```
+
+### 업무 노트의 project 는 어떻게 정해지나
+
+`classify.detect_project()` 가 원본 파일명과 본문에서 등록된 식별자(지번 등)를 찾아 정한다.
+LLM 이 프로젝트 이름을 짓지 않는다 — 모델은 문서에서 읽은 현장 표기를 `site` 로 보고할 뿐이고,
+그 문자열은 레지스트리 대조에만 쓰인다.
+
+식별자를 못 찾으면 **`project: 미정`** 으로 저장하고 텔레그램으로 알린다. 예전에는 기본
+프로젝트로 조용히 채웠는데, 그 탓에 다른 현장 문서까지 같은 프로젝트로 표시됐다
+(2026-08-02 에 192건 중 60건이 그런 상태로 발견됨). 미정 노트는 `review_pending.py` 로 확정한다.
 
 > **RAG 백엔드:** 기본은 **로컬(LanceDB + bge-m3)** 로 Docker 가 필요 없고 한국어 검색이
 > 우수하다. 인덱스는 `rag_db/`(git 제외)에 저장된다. 구 **Open WebUI** 경로는

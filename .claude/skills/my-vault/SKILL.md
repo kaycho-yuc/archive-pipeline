@@ -1,6 +1,6 @@
 ---
 name: my-vault
-description: Operate the archive-pipeline personal knowledge vault — check health, sync notes to the Telegram RAG bot, add a project, or diagnose a freeze. Invoke when the user wants to run, check, fix, or extend their document pipeline / second-brain / Obsidian-RAG / Telegram bot system.
+description: Operate the archive-pipeline personal knowledge vault — check health, sync notes to the Telegram RAG bot, add a project, confirm notes whose project is 미정/unassigned, or diagnose a freeze. Invoke when the user wants to run, check, fix, or extend their document pipeline / second-brain / Obsidian-RAG / Telegram bot system.
 ---
 
 # Personal Vault — operations hub
@@ -25,6 +25,7 @@ RAG + Telegram bot. The owner is a **non-programmer** and returns infrequently, 
    2) 볼트 → 봇 동기화  — push new/edited notes into the Telegram bot's knowledge
    3) 프로젝트 추가     — set up a new project (beyond 성수동 리모델링)
    4) 멈춤 원인 진단    — diagnose a freeze / slowdown
+   5) 미정 노트 확정    — assign a project to notes the pipeline could not identify
    ```
 
 3. Execute the chosen operation below.
@@ -65,18 +66,41 @@ Run `uv run python ingest_vault.py` (it reads `OPENWEBUI_*` from `.env`). Gotcha
   (`POST /api/v1/retrieval/query/collection`) across a few topics, and the authoritative linked
   count from a `file/add` response. KB id is in `.env` (`OPENWEBUI_KB_ID`).
 
-## Operation 3 — Add a new project (Phase 6)
+## Operation 3 — Add a new project
 
-Today all work notes default to `성수동 리모델링` (deterministic, in `notes/write_note.py` via
-`.env DEFAULT_WORK_PROJECT`). When a 2nd project appears:
+This is **config, not code** — the detection machinery already exists. Do not offer to write code.
 
-1. Decide detection rule: keyword/address match (e.g. lot numbers like 685-317) first, LLM
-   inference as fallback. Add `project` to the `Classification` schema in `classifier/classify.py`.
-2. Keep a list of known projects; have `write_note.py` use the detected project instead of the default.
-3. Backfill existing notes with the `migrate_add_project.py` pattern (backup → dry-run → `--execute`).
-4. Re-sync the bot (Operation 2). See `ROADMAP.md` §5 Phase 6.
+A work note's `project` comes from `classify.detect_project()`, which looks for registered
+identifiers (lot numbers like `685-317`, addresses, the project name itself) in the original
+filename and the `## 원문` body. Nothing matches → `project: 미정` and a Telegram notification.
+The LLM never names a project; it only reports a `site` string that is fed back into the same
+registry lookup.
 
-This is a real code change — explain the plan, get the owner's OK, write tests, run `uv run pytest -q`.
+1. Add the project to `.env`:
+   `WORK_PROJECTS={"판교 오피스":["521-3","판교"]}` (JSON, project name → identifiers).
+   Pick identifiers that cannot appear in another project's documents. A bare district name like
+   `성수동` is too loose — it also matches 성수동2가 314-38, a different site.
+2. Preview the effect on existing notes: `uv run python migrate_add_project.py --redetect`.
+   Read every `old → new` line before continuing. Expect only intended moves.
+3. Apply: `uv run python migrate_add_project.py --redetect --execute` (writes a backup zip first).
+4. Confirm anything left at 미정: `uv run python review_pending.py --fix`.
+5. Re-sync the bot (Operation 2).
+
+Checkable result: re-running step 2 reports `변경 대상 0개`, and `review_pending.py` lists only
+notes the owner deliberately left unconfirmed.
+
+## Operation 5 — Confirm notes whose project is 미정
+
+`uv run python review_pending.py` lists them (path, source filename, and the `site` string the
+classifier read). `--fix` walks through them one at a time, applies all choices after one final
+confirmation, backs up first, and re-indexes each changed note.
+
+If the correct project is not on the menu, it is not registered yet — do Operation 3 first, then
+come back. Skipping is safe; the note stays 미정 and reappears next run.
+
+Do **not** "fix" these by editing `.env DEFAULT_WORK_PROJECT` or by re-adding a fallback. Filling
+an unknown project with a default is the bug this replaced: on 2026-08-02 that fallback was found
+to have force-filled 60 of 192 work notes, including documents from other sites.
 
 ## Operation 4 — Diagnose a freeze / slowdown
 

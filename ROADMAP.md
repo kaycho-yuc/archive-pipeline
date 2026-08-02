@@ -121,11 +121,26 @@ Ordered roughly by value-to-effort. Each is independent.
 ### Phase 6 — Multi-project (the likely next need)
 - **Project detection.** ✅ DONE (2026-07-06). `classify.detect_project()` assigns `project` per
   note from deterministic identifiers (lot numbers/addresses); `Classification.project` field;
-  `write_note` uses it, falling back to `DEFAULT_WORK_PROJECT`. Registry = `DEFAULT_WORK_PROJECT`
-  + `PROJECT_IDENTIFIERS` plus optional `WORK_PROJECTS` JSON in `.env`. **When a 2nd project
-  arrives:** add it to `WORK_PROJECTS`, then run `migrate_add_project.py` (dry-run → `--execute`)
-  to re-file existing notes by their `source` filename. (LLM inference was deliberately NOT used —
-  lot numbers are cleaner and the decision log warns LLMs name projects inconsistently.)
+  `write_note` uses it. Registry = `DEFAULT_WORK_PROJECT` + `PROJECT_IDENTIFIERS` plus optional
+  `WORK_PROJECTS` JSON in `.env`. (LLM inference was deliberately NOT used — lot numbers are
+  cleaner and the decision log warns LLMs name projects inconsistently.)
+- **No silent default.** ✅ DONE (2026-08-02). `write_note` used to fall back to
+  `DEFAULT_WORK_PROJECT` whenever nothing matched. That made the field look 100% complete while
+  60 of 192 work notes were force-filled, some onto documents from other sites (성수동2가 314-38,
+  아차산로 90). Unmatched work documents now get `project: 미정` plus a Telegram notification.
+  The classifier reports a `site` string (what it read in the document) which is used **only** as
+  another input to `detect_project`, never as the project value — an LLM-named project would
+  reintroduce exactly the inconsistency this design avoids. `site` is written to frontmatter only
+  while the project is 미정, as evidence for whoever confirms it.
+  Reconcile with `review_pending.py` (list, or `--fix` to confirm one by one + re-index).
+  Vault state after migration: 164 성수동 리모델링 / 27 미정 / 1 기타.
+- **When a 2nd project arrives:** add it to `WORK_PROJECTS` in `.env`, then
+  `migrate_add_project.py --redetect` (dry-run → `--execute`) to re-derive existing notes.
+  `--redetect` is opt-in and only overwrites values the pipeline could have produced (a registry
+  key, or 미정) — anything a human typed is left alone, otherwise every confirmation made through
+  `review_pending.py` would be silently undone on the next run. Detection reads the `source`
+  filename **and** the `## 원문` body, matching the live pipeline; it must never scan the whole
+  note, because the frontmatter already carries the project label and would match itself.
 - **Project-scoped RAG.** ◻ Remaining. Filter `rag_local` search by the `project` column (a
   `/project 성수동` command, or detect project from the question) so the bot answers within one
   project. LanceDB supports a `where` filter on the query.
