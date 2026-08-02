@@ -1,6 +1,5 @@
 """Classification 결과를 Obsidian 마크다운 노트로 저장하는 모듈."""
 
-import os
 import re
 from datetime import date as _Date, datetime
 from pathlib import Path
@@ -15,9 +14,10 @@ _DOMAIN_FOLDERS = {"업무": "10_Professional", "개인": "20_Personal"}
 _FALLBACK_FOLDER = "90_System"
 
 # 업무 노트에는 어떤 프로젝트인지 frontmatter 에 기록한다. 분류기가 파일명·본문의
-# 지번 등으로 프로젝트를 판별하며(classify.detect_project), 못 찾으면 기본값으로 폴백한다.
+# 지번 등으로 프로젝트를 판별하며(classify.detect_project), 못 찾으면 "미정"으로 남겨
+# 나중에 사람이 확정하게 한다(조용히 기본 프로젝트로 잘못 채우지 않음).
 _WORK_DOMAIN = "업무"
-DEFAULT_WORK_PROJECT = os.getenv("DEFAULT_WORK_PROJECT", "성수동 리모델링")
+UNKNOWN_PROJECT = "미정"
 
 
 def _sanitize(name: str) -> str:
@@ -80,10 +80,16 @@ def _build_markdown(
 ) -> str:
     tags = _merge_tags(result, source_name)
     # 업무 노트에만 project 필드를 넣는다(개인 노트엔 의미 없음). 분류기가 판별한 프로젝트를
-    # 쓰고, 못 찾았으면(빈 값) 기본 프로젝트로 폴백한다.
-    project = getattr(result, "project", "") or DEFAULT_WORK_PROJECT
+    # 쓰고, 못 찾았으면(빈 값) "미정"으로 남긴다(엉뚱한 기본 프로젝트로 조용히 채우지 않음).
+    project = getattr(result, "project", "") or UNKNOWN_PROJECT
     project_line = (
         f"project: {project}\n" if result.domain == _WORK_DOMAIN else ""
+    )
+    # 프로젝트를 못 정했을 때만 모델이 읽은 현장 표기를 남긴다(나중에 사람이 확정할 근거).
+    site_line = (
+        f"site: {result.site}\n"
+        if result.domain == _WORK_DOMAIN and project == UNKNOWN_PROJECT and result.site
+        else ""
     )
     # 값이 있을 때만 넣는 구조화 필드(기계 파싱용). 비면 생략해 frontmatter 를 깔끔히.
     extra = "".join(
@@ -100,7 +106,7 @@ def _build_markdown(
     return f"""---
 title: {result.title}
 domain: {result.domain}
-{project_line}category: {result.category}
+{project_line}{site_line}category: {result.category}
 {extra}{_format_tags(tags)}
 source: {source_name}
 {email_line}created: {created.strftime("%Y-%m-%d %H:%M")}

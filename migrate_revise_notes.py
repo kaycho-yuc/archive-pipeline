@@ -150,6 +150,10 @@ def main() -> None:
         except Exception as e:
             print(f"  [{i}/{len(notes)}] 분류 실패(건너뜀): {note.name} -> {e}")
             continue
+        # 이 스크립트는 제목·유형만 갱신하고 project 는 기존 값을 살린다(위 독스트링의 약속).
+        # 재분류 결과를 그대로 쓰면 손으로 확정해 둔 프로젝트가 "미정"으로 덮인다.
+        if fm.get("project"):
+            result.project = fm["project"]
         if result.kind == KIND_REFERENCE:
             refs.append(note.name)
             print(f"  [{i}/{len(notes)}] (참고자료?, 변경안함) {note.name}")

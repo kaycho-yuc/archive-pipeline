@@ -425,6 +425,15 @@ def process_file(
 
         note_path = write_note(result, name, text, vault_path, origin_email=origin_email)
         logger.info("노트 저장: %s", note_path)
+
+        # 프로젝트를 못 정한 업무 문서는 나중에 사람이 확정해야 하므로 알린다.
+        if result.domain == "업무" and not result.project:
+            notifier.notify(
+                f"❓ 프로젝트 미정: {name}\n"
+                f"문서에서 읽은 현장: {result.site or '없음'}\n"
+                f"→ 노트는 저장됨(project: 미정)"
+            )
+
         _index_note_best_effort(note_path)  # 새 노트를 로컬 RAG 에 즉시 반영(best-effort)
 
         _record_hash(file_hash, name, str(note_path))

@@ -191,3 +191,60 @@ def test_classify_personal_has_no_project(monkeypatch):
     monkeypatch.setattr(classify_module, "_call_llm", _fake_response(payload))
     result = classify("내용", source_name="685-317 메모.md")
     assert result.project == ""  # 개인 노트엔 프로젝트를 부여하지 않는다
+
+
+# --- site: 모델이 읽은 현장 표기로 project 를 한 번 더 대조 ---
+
+
+def test_classify_project_from_site_when_filename_and_body_lack_identifier(monkeypatch):
+    # 파일명·본문엔 등록된 식별자가 없어도 site 가 등록된 식별자와 일치하면 project 가 잡힌다.
+    payload = {
+        "domain": "업무",
+        "category": "계약서",
+        "summary": "s",
+        "site": "성수동1가",
+    }
+    monkeypatch.setattr(classify_module, "_call_llm", _fake_response(payload))
+    result = classify("내용", source_name="계약서.pdf")
+    assert result.project == PROJECT_NAME
+
+
+def test_classify_unregistered_site_does_not_leak_into_project(monkeypatch):
+    # 안티 환각 가드: site 가 미등록 주소면 project 는 빈 문자열이어야 하고,
+    # 그 원문 site 문자열이 project 로 새어 들어가면 안 된다.
+    payload = {
+        "domain": "업무",
+        "category": "계약서",
+        "summary": "s",
+        "site": "아차산로 90",
+    }
+    monkeypatch.setattr(classify_module, "_call_llm", _fake_response(payload))
+    result = classify("내용", source_name="계약서.pdf")
+    assert result.project == ""
+    assert result.project != "아차산로 90"
+
+
+def test_classify_site_carried_through_to_classification(monkeypatch):
+    # 모델이 읽은 site 값이 그대로 Classification 에 실려야 한다(등록 여부와 무관).
+    payload = {
+        "domain": "업무",
+        "category": "계약서",
+        "summary": "s",
+        "site": "아차산로 90",
+    }
+    monkeypatch.setattr(classify_module, "_call_llm", _fake_response(payload))
+    result = classify("내용", source_name="계약서.pdf")
+    assert result.site == "아차산로 90"
+
+
+def test_classify_personal_ignores_site_even_if_registered(monkeypatch):
+    # 개인 문서는 site 가 등록된 식별자와 일치해도 project 를 부여하지 않는다.
+    payload = {
+        "domain": "개인",
+        "category": "메모",
+        "summary": "s",
+        "site": "성수동1가",
+    }
+    monkeypatch.setattr(classify_module, "_call_llm", _fake_response(payload))
+    result = classify("내용", source_name="메모.md")
+    assert result.project == ""

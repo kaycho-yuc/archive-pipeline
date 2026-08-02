@@ -12,6 +12,7 @@ RESULT = Classification(
     counterparty="영진건설",
     doc_date="2026-03-12",
     status="초안",
+    project="성수동 리모델링",  # 분류기가 판별한 프로젝트(더 이상 미설정 시 자동 폴백 없음)
 )
 
 _Q = f"{datetime.now().year}-Q{(datetime.now().month - 1) // 3 + 1}"
@@ -131,6 +132,35 @@ def test_write_note_avoids_collision(tmp_path):
 
     assert first != second
     assert second.name == "주간 회의 정리-1.md"
+
+
+def test_write_note_unknown_project_writes_placeholder(tmp_path):
+    # project 를 못 정한 업무 노트는 조용히 기본 프로젝트로 채우지 않고 "미정"으로 남긴다.
+    result = Classification(
+        domain="업무", category="계약서", title="미정 프로젝트 문서", summary="s", project="",
+    )
+    path = write_note(result, "x.pdf", "c", tmp_path)
+    assert "project: 미정" in path.read_text(encoding="utf-8")
+
+
+def test_write_note_unknown_project_includes_site_line(tmp_path):
+    # project 가 미정일 때만 모델이 읽은 site 를 남겨 나중에 사람이 확정할 근거로 쓴다.
+    result = Classification(
+        domain="업무", category="계약서", title="미정 프로젝트 문서", summary="s",
+        project="", site="아차산로 90",
+    )
+    path = write_note(result, "x.pdf", "c", tmp_path)
+    assert "site: 아차산로 90" in path.read_text(encoding="utf-8")
+
+
+def test_write_note_known_project_omits_site_line(tmp_path):
+    # project 가 판별됐으면 site 값이 있어도 frontmatter 에 site: 를 넣지 않는다.
+    result = Classification(
+        domain="업무", category="계약서", title="판별된 프로젝트 문서", summary="s",
+        project="성수동 리모델링", site="아차산로 90",
+    )
+    path = write_note(result, "x.pdf", "c", tmp_path)
+    assert "site:" not in path.read_text(encoding="utf-8")
 
 
 def test_write_note_sanitizes_invalid_chars(tmp_path):

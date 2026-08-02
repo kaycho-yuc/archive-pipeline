@@ -113,6 +113,7 @@ SYSTEM_PROMPT = f"""\
   "doc_date": "문서 자체의 날짜 YYYY-MM-DD (모르면 YYYY-MM, 없으면 빈 문자열)",
   "status": "초안/최종 등 상태 또는 빈 문자열",
   "detail": "제목 괄호에 넣을 짧은 부가설명(범위/대상) 또는 빈 문자열",
+  "site": "문서에 적힌 현장 지번·주소·현장명 그대로 또는 빈 문자열",
   "tags": ["핵심 키워드 3~6개"],
   "summary": "문서 핵심 내용을 3~5문장으로 요약"
 }}
@@ -135,6 +136,8 @@ SYSTEM_PROMPT = f"""\
   활용. **명확한 날짜가 없으면 빈 문자열.** 월·일을 추측해 지어내지 마라(예: 1월 1일로 채우지 말 것).
 - status: "초안"/"최종"/"수정" 등 명시돼 있을 때만. 없으면 빈 문자열.
 - detail: 범위나 대상을 한두 단어로(예: "근생 리모델링", "설비전기통신소방", "685-317 해체"). 없으면 빈 문자열.
+- site: 문서/파일명에 **실제로 적힌** 현장 지번·주소·현장명만 그대로 옮기세요. 추측·창작
+  절대 금지(counterparty 와 동일한 원칙). 없으면 빈 문자열.
 - kind: '{PROJECT_NAME}'({", ".join(PROJECT_IDENTIFIERS)}) 프로젝트의 실제 자료면 "프로젝트자료";
   빈 양식·표준서식·샘플·정부지침/매뉴얼/사례집·다른 현장 문서면 "참고자료". 애매하면 "프로젝트자료".
 - tags: 검색용 키워드 3~6개(공백 없는 짧은 단어).
@@ -153,6 +156,7 @@ class Classification:
     doc_date: str = ""
     status: str = ""
     project: str = ""
+    site: str = ""
 
 
 def compose_title(category: str, counterparty: str, doc_date: str,
@@ -178,6 +182,7 @@ def _build_messages(text: str, source_name: str = "") -> list[dict]:
         '{"domain":"개인|업무","kind":"프로젝트자료|참고자료","category":"문서유형",'
         '"counterparty":"상대방 또는 \\"\\"","doc_date":"YYYY-MM-DD 또는 \\"\\"",'
         '"status":"초안/최종 또는 \\"\\"","detail":"부가설명 또는 \\"\\"",'
+        '"site":"현장 지번/주소 또는 \\"\\"",'
         '"tags":[...],"summary":"..."}. '
         f"category 는 가급적 [{DOC_TYPES}] 중에서. doc_date 는 파일명/본문의 날짜를 ISO 로."
     )
@@ -313,9 +318,15 @@ def _parse_response(raw: str, source_name: str = "", text: str = "") -> Classifi
     # doc_date 는 형식뿐 아니라 '실제로 존재하는 날짜'인지까지 검증한다(2026-02-32 같은 값 차단).
     doc_date = _valid_doc_date(str(data.get("doc_date") or "").strip())
 
-    # project 는 LLM 추측이 아니라 파일명·본문의 결정적 식별자(지번 등)로 판별한다.
-    # 업무 문서에만 부여하고, 못 찾으면 빈 문자열(write_note 가 기본 프로젝트로 폴백).
-    project = detect_project(source_name, text) if domain == "업무" else ""
+    # 모델이 문서에서 읽은 현장 표기. project 를 이 문자열로 정하지 않고 레지스트리 대조에만
+    # 쓴다. 그대로 쓰면 모델의 환각이 frontmatter 로 새어 들어간다.
+    site = str(data.get("site") or "").strip()
+
+    # project 는 LLM 추측이 아니라 결정적 식별자(지번 등)로 판별한다. 파일명·본문에서 못 찾으면
+    # 모델이 읽은 site 로 한 번 더 대조하고, 그래도 못 찾으면 빈 문자열로 둔다(호출부가 미정 처리).
+    project = ""
+    if domain == "업무":
+        project = detect_project(source_name, text) or detect_project(site)
 
     return Classification(
         domain=domain,
@@ -328,6 +339,7 @@ def _parse_response(raw: str, source_name: str = "", text: str = "") -> Classifi
         doc_date=doc_date,
         status=status,
         project=project,
+        site=site,
     )
 
 

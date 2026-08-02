@@ -35,6 +35,55 @@ def test_process_file_end_to_end(tmp_path, monkeypatch):
     assert (archive / "memo.txt").exists()  # _archive 로 이동
 
 
+def test_process_file_notifies_when_project_unknown(tmp_path, monkeypatch):
+    # 업무 문서인데 project 를 못 정했으면(빈 문자열) 사람이 나중에 확인하도록 알린다.
+    inbox = tmp_path / "inbox"
+    inbox.mkdir()
+    source = inbox / "memo.txt"
+    source.write_text("회의 내용입니다.", encoding="utf-8")
+
+    monkeypatch.setattr(
+        pipeline,
+        "classify",
+        lambda text, source_name="": Classification(
+            "업무", "회의록", "메모", "요약.", project="", site="아차산로 90"
+        ),
+    )
+    notified = []
+    monkeypatch.setattr(pipeline.notifier, "notify", lambda msg: notified.append(msg))
+
+    pipeline.process_file(
+        source, vault_path=tmp_path / "v", archive_dir=tmp_path / "a"
+    )
+
+    assert len(notified) == 1
+    assert "아차산로 90" in notified[0]
+
+
+def test_process_file_no_notify_when_project_detected(tmp_path, monkeypatch):
+    # project 가 판별됐으면 알리지 않는다.
+    inbox = tmp_path / "inbox"
+    inbox.mkdir()
+    source = inbox / "memo.txt"
+    source.write_text("회의 내용입니다.", encoding="utf-8")
+
+    monkeypatch.setattr(
+        pipeline,
+        "classify",
+        lambda text, source_name="": Classification(
+            "업무", "회의록", "메모", "요약.", project="성수동 리모델링"
+        ),
+    )
+    notified = []
+    monkeypatch.setattr(pipeline.notifier, "notify", lambda msg: notified.append(msg))
+
+    pipeline.process_file(
+        source, vault_path=tmp_path / "v", archive_dir=tmp_path / "a"
+    )
+
+    assert notified == []
+
+
 def test_process_file_explodes_msg_attachments(tmp_path, monkeypatch):
     # .msg 는 이메일 노트 1개 + 각 첨부가 독립 노트가 되고, 첨부 노트엔 출처 이메일이 남는다.
     inbox = tmp_path / "inbox"
@@ -123,7 +172,9 @@ def test_process_file_defers_on_move_timeout(tmp_path, monkeypatch):
     monkeypatch.setattr(
         pipeline,
         "classify",
-        lambda text, source_name="": Classification("업무", "회의록", "메모", "요약."),
+        lambda text, source_name="": Classification(
+            "업무", "회의록", "메모", "요약.", project="성수동 리모델링"
+        ),
     )
 
     def _hang(file_path, dest_dir, timeout=pipeline.MOVE_TIMEOUT):
