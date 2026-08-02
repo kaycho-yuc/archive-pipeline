@@ -1,3 +1,5 @@
+import sys
+
 import pytest
 
 import notifier
@@ -333,6 +335,34 @@ def test_sweep_inbox_processes_supported_and_quarantines_unsupported(
     assert (archive / "memo.txt").exists()  # 지원 파일 처리·아카이브
     assert (failed / "도면.dwg").exists()  # 미지원 파일 격리
     assert "| 도면.dwg |" in (vault / "미지원_파일_목록.md").read_text(encoding="utf-8")
+
+
+def test_process_file_does_not_touch_real_rag_index(tmp_path, monkeypatch):
+    """process_file 실행 후 rag_local 이 sys.modules 에 없어야 한다.
+
+    실패하면(rag_local 이 임포트됐다면) conftest.py 의 격리 fixture가 뚫린 것이고,
+    실제로는 owner 의 운영 볼트 RAG 인덱스에 이 테스트가 만든 가짜 노트가 쓰였다는 뜻이다."""
+    monkeypatch.delitem(sys.modules, "rag_local", raising=False)
+
+    inbox = tmp_path / "inbox"
+    inbox.mkdir()
+    source = inbox / "memo.txt"
+    source.write_text("회의 내용입니다.", encoding="utf-8")
+
+    monkeypatch.setattr(
+        pipeline,
+        "classify",
+        lambda text, source_name="": Classification(
+            "업무", "회의록", "메모", "요약.", project="성수동 리모델링"
+        ),
+    )
+
+    note_path = pipeline.process_file(
+        source, vault_path=tmp_path / "v", archive_dir=tmp_path / "a"
+    )
+
+    assert note_path is not None
+    assert "rag_local" not in sys.modules
 
 
 def test_process_file_quarantines_on_classify_error(tmp_path, monkeypatch):

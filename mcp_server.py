@@ -57,16 +57,26 @@ def _frontmatter(path: Path) -> dict[str, str]:
 
 
 @mcp.tool()
-def search_vault(query: str, k: int = 5) -> str:
+def search_vault(
+    query: str, k: int = 5, domain: str = "", project: str = "", category: str = "", since: str = ""
+) -> str:
     """볼트에서 질문과 관련된 노트 조각을 찾는다. 볼트를 볼 일이 있으면 항상 여기서 시작할 것.
 
     노트 파일을 직접 열거나 폴더를 뒤지지 말 것 — 볼트 전체는 약 467,000토큰이고 이 검색은
     약 530토큰이다. 전문이 꼭 필요할 때만 결과의 노트 이름으로 get_note 를 부른다.
     지번(685-317)·회사명 같은 고유명사에 강한 하이브리드 검색이다.
+
+    domain: 정확히 "업무" 또는 "개인" — 업무/개인 노트를 가르는 가장 싼 방법.
+    project: 프론트매터 project 와 정확히 일치. "미정"은 파이프라인이 프로젝트를 못 알아낸
+        노트를 뜻하는 실제 값이다(현재 27건).
+    since: YYYY-MM-DD, 사전순 비교. 날짜 없는 노트는 제외된다.
+    이 필터들은 모두 정확 일치다 — list_notes 의 부분 일치와 다르다.
     """
     import rag_local  # 지연 임포트: 이 도구를 실제로 쓸 때만 lancedb 비용을 낸다
 
-    hits = rag_local.search(query, k=k)
+    hits = rag_local.search(
+        query, k=k, domain=domain, project=project, category=category, since=since
+    )
     if not hits:
         return "관련 내용을 찾지 못했습니다."
     out = []
@@ -94,16 +104,19 @@ def ask_vault(question: str) -> str:
 
 @mcp.tool()
 def list_notes(
-    category: str = "", project: str = "", since: str = "", limit: int = 50
+    domain: str = "", category: str = "", project: str = "", since: str = "", limit: int = 50
 ) -> str:
     """조건에 맞는 노트 '제목만' 나열한다(전문 아님). 볼트에 뭐가 있는지 훑을 때.
 
-    category/project 는 부분 일치, since 는 YYYY-MM-DD 이후 문서만. 무엇을 찾을지 모를 땐
+    domain/category/project 는 부분 일치, since 는 YYYY-MM-DD 이후 문서만. 무엇을 찾을지 모를 땐
     이걸로 범위를 좁힌 뒤 search_vault 를 쓰는 편이 싸다.
+    주의: search_vault 의 같은 이름 필터는 정확 일치다 — 여기(부분 일치)와 의미가 다르다.
     """
     rows = []
     for path in _notes():
         fm = _frontmatter(path)
+        if domain and domain not in fm.get("domain", ""):
+            continue
         if category and category not in fm.get("category", ""):
             continue
         if project and project not in fm.get("project", ""):
