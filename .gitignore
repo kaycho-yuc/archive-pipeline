@@ -10,6 +10,8 @@ _inbox/*
 !_inbox/.gitkeep
 _archive/*
 !_archive/.gitkeep
+_review/*
+!_review/.gitkeep
 _failed/
 processing_log.csv
 resource_log.csv
