@@ -1,57 +1,53 @@
-# 현재 상태 (Windows 세션 인수인계)
+# 현재 상태 (2026-08-08 기준)
 
-맥에서 파이프라인 전체를 작성·테스트했고, iCloud로 이 프로젝트가 윈도우 PC에 동기화되어 있습니다.
-이 문서는 윈도우 Claude Code 새 세션이 곧바로 스모크 테스트를 이어가도록 돕기 위한 것입니다.
+이 파일은 "지금 무엇이 돌아가고 있는가"만 담는다. 왜 그렇게 됐는지는 `SESSION-STATE.md`,
+결정 이력은 `ROADMAP.md`, 문제 해결 기록은 `learnings/` 를 본다.
 
-## 빌드 완료 (1~6단계)
+## 한 줄 요약
+개인용 파이프라인이 **n100-win 한 대에서만** 돌아간다. 분류·OCR·임베딩·답변 네 군데 모두
+Gemini 클라우드다. STRX-D75 는 이 저장소를 더 이상 돌리지 않는다(회사 자료 RAG 는 별도 구축 예정).
 
-| 모듈 | 파일 | 검증 |
+## 지금 돌아가는 것
+
+| 구성 | 상태 | 비고 |
 |---|---|---|
-| 추출 (PDF/이미지 OCR/텍스트) | `extractors/extract.py` | 맥에서 PDF·텍스트 검증, OCR은 코드만 |
-| 분류·요약 (Ollama) | `classifier/classify.py` | 파싱·검증 검증 (LLM 모킹) |
-| 노트 저장 | `notes/write_note.py` | frontmatter·충돌·특수문자 검증 |
-| 파이프라인 (파일 1개) | `pipeline.py` | end-to-end 검증 |
-| 자동 감시 (상시 실행) | `watch.py` | 미실행 |
-| 일괄 처리 (수동 실행) | `run_once.py` | 미실행 |
+| 감시·자동처리 (`run_watch.py`) | 실행 중 | 예약작업 `ArchivePipelineWatch`, 로그온 트리거, 창 안 뜸 |
+| 분류·요약 | `gemini-3.1-flash-lite` | 3.5 는 A/B 후 기각(카테고리 어휘 이탈) |
+| OCR | `gemini-3.5-flash-lite` | n100 에 Tesseract 없음. 페이지당 1 호출, 상한 30쪽 |
+| RAG 색인·검색 | LanceDB 하이브리드 | `gemini-embedding-001`, 3072차원 |
+| RAG 답변 | `gemini-3.1-flash-lite` | 1.4~2.3초 |
+| 텔레그램 봇 | 실행 중 | 실패 알림 + 질의응답, chat id `300683554` |
+| MCP 서버 (`mcp_server.py`) | 등록됨 | `.mcp.json` 프로젝트 스코프 — 이 저장소 세션에서만 로드 |
 
-`python -m pytest tests/` 기준 맥에서 11/11 통과.
+- 볼트 노트 **244개**
+- 테스트 **119개 통과** (네트워크 호출 없음)
+- 브랜치 `main`
 
-## 핵심 설계
-- `classify`는 Ollama를 `format="json"`, `temperature=0`으로 호출하고 `domain`이 반드시 `개인`/`업무`인지 검증한다. 아니면 `ValueError`.
-- 처리 실패 시 `_inbox` 원본을 이동하지 않고 보존한다 (재시도 가능, 데이터 유실 없음).
-- 볼트 경로는 OS별로 자동 선택한다 (`pipeline.py:_resolve_vault_path`). `.env`에 맥·윈도우 경로가 둘 다 있고, iCloud로 `.env`가 공유되므로 한 파일로 양쪽 동작한다.
+## 최근에 끝난 일 (7/29 ~ 8/2)
+- **아카이브 이동 버그** — iCloud 경계를 넘는 `os.rename` 이 WinError 426 으로 멈춰 모든 파일이
+  묶여 있었다. `.part` 복사 + `os.replace` + 원본 삭제로 교체.
+- **볼트 중복 정리** — 267 → 244. 그룹 단위가 아니라 쌍 단위 클러스터링으로 판정.
+- **MCP 노출** — 에이전트가 볼트 파일을 직접 읽지 않게 했다. 볼트 전체 약 467,000토큰 대
+  검색 1회 약 530토큰.
+- **필터 컬럼 4종** (`domain`/`project`/`category`/`doc_date`) 색인에 추가. `domain` 은 결측 0%라
+  나중에 웹 경로를 열 때 개인 노트만 공개하는 규칙을 코드로 강제할 수 있다.
+  하이브리드 검색의 `.where()` 가 벡터·FTS 양쪽에 다 걸리는지는 스키마 변경 **전에** 확인했다.
+- **Qwen 평가** — 생성은 이겼지만 임베딩이 날짜 범위 질의에서 회수 실패. Gemini 유지.
+  디스패처 코드는 남겨서 되돌리려면 `.env` 한 줄이다.
+- **프로젝트 미정 처리** — 못 알아낸 문서는 추측하지 않고 `project: 미정` 으로 저장하고
+  텔레그램으로 알린다. 참고자료는 `_review/` 로 분리.
+- **감시자 중복 실행 방지** — 소켓 바인드 잠금(포트 47823). 죽어도 OS 가 회수한다.
 
-## 윈도우에서 할 일: 스모크 테스트
+## 알려진 미해결
+1. 텔레그램 답변에 `**굵게**` 가 문자 그대로 보인다(`parse_mode` 미설정). 미관 문제.
+2. `rag_db.baseline-20260731/` 백업 폴더 유지 중 — Qwen 작업이 확실히 안정되면 삭제.
+3. 저장소 루트에 정리 안 된 파일 몇 개(`2002.08909v1_*.pdf`, `udikw_202606_003.pdf`, `-003-1` 등).
+4. 회사 자료 RAG(STRX-D75) 는 아직 시작 전 — 이 저장소 범위 밖.
 
-```powershell
-cd <이 프로젝트 폴더>           # 예: C:\Users\OWNER\iCloudDrive\...\Projects\archive-pipeline
-
-# 의존성은 uv로 관리 (.venv 생성 + uv.lock 재현)
-uv sync
-
-# Ollama 확인 (별도 창)
-ollama serve
-ollama pull llama3.1
-
-# 테스트 파일 투입
-echo 다음주 화요일 오후 2시 강남 현장 점검 회의. 참석자 3명. > _inbox\test.txt
-
-# 일괄 처리 실행
-uv run python run_once.py
-```
-
-### 성공 기준
-- 로그에 `노트 저장: ...KC_second_brain\업무\...md`, `아카이브 이동 완료` 출력
-- Obsidian 볼트 `KC_second_brain\업무\<카테고리>\` 아래에 새 `.md` 노트 생성
-- `_inbox\test.txt` → `_archive\` 로 이동
-
-### 윈도우 주의점
-- Tesseract OCR은 **이미지** 파일일 때만 필요. PDF·텍스트는 불필요. 핸드오프상 PATH 등록 완료이나, `pytesseract`가 "tesseract not found"면 PATH 누락.
-- 환경은 uv가 만든 `.venv\` 사용(`uv sync`). 옛 `venv\`·`venv-win\`·`__pycache__\` 는 무시/제거 대상.
-
-## 환경 차이
-- 맥에는 Ollama·Tesseract 없음 → 맥에서는 LLM·OCR 실호출 테스트 불가. 윈도우가 실호출 검증의 본 무대.
-- 맥은 핸드오프상 Claude API 백엔드 사용 예정 (`classifier/classify.py`의 `_call_ollama`만 교체). 아직 미구현.
-
-## 남은 단계
-- 7단계: 윈도우 Task Scheduler 등록 (스모크 테스트 통과 후)
+## 재개 체크리스트
+- `Get-ScheduledTask ArchivePipelineWatch` → `Running`
+- `uv run pytest -q` → 119 pass
+- **코드를 고쳤으면 예약작업을 재시작한다** (`Stop-ScheduledTask` → `Start-ScheduledTask`).
+  감시자는 시작 시점에 임포트한 코드를 들고 있다. 테스트는 초록인데 실제 감시자는 옛 동작을
+  내보내는 상황을 한 번 겪었다.
+- STRX-D75 가 돌아와도 이 예약작업은 n100 에만 둔다(공유 `_inbox` 를 두 대가 보면 안 된다).
