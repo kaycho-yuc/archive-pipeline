@@ -1,57 +1,50 @@
-# 현재 상태 (Windows 세션 인수인계)
+# 현재 상태 (스냅샷)
 
-맥에서 파이프라인 전체를 작성·테스트했고, iCloud로 이 프로젝트가 윈도우 PC에 동기화되어 있습니다.
-이 문서는 윈도우 Claude Code 새 세션이 곧바로 스모크 테스트를 이어가도록 돕기 위한 것입니다.
+> 작성 기준: 2026-08-08 · 브랜치 `main` (origin 과 동기화, HEAD `e2f3a9f`)
+> 이 문서는 짧은 현황 스냅샷이다. 상세 구현 인계는 [SYSTEM-HANDOFF.md](SYSTEM-HANDOFF.md),
+> 개념·로드맵은 [ROADMAP.md](ROADMAP.md), 5분 요약은 [OVERVIEW.md](OVERVIEW.md),
+> 시행착오 기록은 [learnings/](learnings/), 운영은 `/my-vault` 스킬.
 
-## 빌드 완료 (1~6단계)
+## 한 줄 요약
 
-| 모듈 | 파일 | 검증 |
+`_inbox` 에 떨어진 문서를 **추출 → 로컬 LLM 분류·구조화 → Obsidian 노트 생성 → 원본 아카이브**하고,
+볼트 전체를 **로컬 RAG**(LanceDB + bge-m3)로 만들어 **텔레그램으로 한국어 질의**까지 하는 개인용 지식관리 파이프라인.
+상시 운영 환경은 **Windows 11 + RTX 4080**, 의존성은 **uv**, 처리는 전부 로컬(분류 백엔드로 Gemini 선택 시 예외).
+
+## 구현 완료 · 동작 중
+
+| 영역 | 파일 | 상태 |
 |---|---|---|
-| 추출 (PDF/이미지 OCR/텍스트) | `extractors/extract.py` | 맥에서 PDF·텍스트 검증, OCR은 코드만 |
-| 분류·요약 (Ollama) | `classifier/classify.py` | 파싱·검증 검증 (LLM 모킹) |
-| 노트 저장 | `notes/write_note.py` | frontmatter·충돌·특수문자 검증 |
-| 파이프라인 (파일 1개) | `pipeline.py` | end-to-end 검증 |
-| 자동 감시 (상시 실행) | `watch.py` | 미실행 |
-| 일괄 처리 (수동 실행) | `run_once.py` | 미실행 |
+| 추출 (PDF·이미지 OCR·txt·hwp·hwpx·xlsx·docx·msg·xml) | `extractors/extract.py` | 동작. 스캔 PDF 는 OCR 폴백(이진화 + `--psm 6`) |
+| 분류·구조화 (도메인·kind·category·상대방·날짜·태그·제목) | `classifier/classify.py` | 동작. 백엔드 `LLM_PROVIDER`=ollama(기본)/gemini |
+| 노트 작성 (10_/20_/90_ + YYYY-QN, frontmatter 태그) | `notes/write_note.py` | 동작 |
+| 파이프라인 (중복 SHA-256 · iCloud 하이드레이션 가드 · 참고자료 격리) | `pipeline.py` | 동작 |
+| 사람 검토 대기열 (프로젝트 미정·참고자료 판정 확인) | `review_pending.py` · `_review/` | 동작. `/my-vault` 로 확정 |
+| 감시 / 일괄 / 스케줄러 진입점 (창 없는 실행·중복 인스턴스 차단) | `watch.py` · `run_once.py` · `run_watch.py` · `run_watch_hidden.vbs` | 동작 |
+| 로컬 RAG (적재·검색·답변) | `rag_local.py` · `ingest_vault.py` | 동작 (LanceDB + bge-m3) |
+| 볼트를 로컬 에이전트에 노출하는 MCP 서버 | `mcp_server.py` | 동작 |
+| 텔레그램 봇 · 실패 알림 · 리소스 모니터 | `telegram_bot.py` · `notifier.py` · `monitor.py` | 동작 |
+| 볼트 마이그레이션 (구조 변경·중복 제거) | `migrate_*.py` (`migrate_dedupe_notes.py` 등) | 백업 → dry-run → `--execute` |
+| Revit/Enscape 전후 AI 스택 정지·복구 | `pause_ai.ps1` · `resume_ai.ps1` | 동작 |
 
-`python -m pytest tests/` 기준 맥에서 11/11 통과.
+**테스트: `uv run pytest -q` 기준 109 passed** (이 Mac에서 확인). LLM·OCR·텔레그램은 모킹, RAG 인덱스는 격리(`tests/conftest.py`).
 
 ## 핵심 설계
-- `classify`는 Ollama를 `format="json"`, `temperature=0`으로 호출하고 `domain`이 반드시 `개인`/`업무`인지 검증한다. 아니면 `ValueError`.
-- 처리 실패 시 `_inbox` 원본을 이동하지 않고 보존한다 (재시도 가능, 데이터 유실 없음).
-- 볼트 경로는 OS별로 자동 선택한다 (`pipeline.py:_resolve_vault_path`). `.env`에 맥·윈도우 경로가 둘 다 있고, iCloud로 `.env`가 공유되므로 한 파일로 양쪽 동작한다.
 
-## 윈도우에서 할 일: 스모크 테스트
+- 분류 백엔드는 `.env` 의 `LLM_PROVIDER` 로 머신별 선택(ollama / gemini). `.env` 는 git 제외.
+- 파일명 최우선(filename-first) 분류: 원본 파일명이 유형·상대방·날짜의 최고 권위 근거, 본문 OCR 은 보조.
+- 제목은 `compose_title()` 로 결정적 조립(LLM 이 제목 문자열을 직접 만들지 않음).
+- **프로젝트는 식별자로 못 찾으면 추측하지 않고 `미정`으로 남긴다**(가짜 채움 금지). 사람이 `_review` 에서 확정한다.
+- 참고자료(빈 양식·샘플·정부지침·다른 현장)는 노트로 만들지 않고 격리 → 봇 지식베이스 정확도 보호.
+- 중복 판정은 요약이 아니라 **문서 본문**으로 비교한다(요약 노이즈 방지). 처리 실패·빈 텍스트는 `_failed` 격리.
+- 볼트 경로는 OS별 자동 선택(`pipeline.py:_resolve_vault_path`), iCloud 온라인 전용 파일은 다운로드 대기 가드.
 
-```powershell
-cd <이 프로젝트 폴더>           # 예: C:\Users\OWNER\iCloudDrive\...\Projects\archive-pipeline
+## 환경 메모
 
-# 의존성은 uv로 관리 (.venv 생성 + uv.lock 재현)
-uv sync
+- 상시 운영: Windows 작업 스케줄러가 부팅 시 `run_watch.py`(창 없이) 실행, 중복 인스턴스는 스스로 거부.
+- 이 Mac 은 개발·테스트용(uv 로 테스트 통과 확인 가능). Ollama·Tesseract 실호출은 Windows 가 본 무대.
+- 로컬 폴백 `vault/`, `.agents/`, `rag_db/`, `.env`, 로그·해시 파일은 gitignore.
 
-# Ollama 확인 (별도 창)
-ollama serve
-ollama pull llama3.1
+## 열린 항목 / 다음
 
-# 테스트 파일 투입
-echo 다음주 화요일 오후 2시 강남 현장 점검 회의. 참석자 3명. > _inbox\test.txt
-
-# 일괄 처리 실행
-uv run python run_once.py
-```
-
-### 성공 기준
-- 로그에 `노트 저장: ...KC_second_brain\업무\...md`, `아카이브 이동 완료` 출력
-- Obsidian 볼트 `KC_second_brain\업무\<카테고리>\` 아래에 새 `.md` 노트 생성
-- `_inbox\test.txt` → `_archive\` 로 이동
-
-### 윈도우 주의점
-- Tesseract OCR은 **이미지** 파일일 때만 필요. PDF·텍스트는 불필요. 핸드오프상 PATH 등록 완료이나, `pytesseract`가 "tesseract not found"면 PATH 누락.
-- 환경은 uv가 만든 `.venv\` 사용(`uv sync`). 옛 `venv\`·`venv-win\`·`__pycache__\` 는 무시/제거 대상.
-
-## 환경 차이
-- 맥에는 Ollama·Tesseract 없음 → 맥에서는 LLM·OCR 실호출 테스트 불가. 윈도우가 실호출 검증의 본 무대.
-- 맥은 핸드오프상 Claude API 백엔드 사용 예정 (`classifier/classify.py`의 `_call_ollama`만 교체). 아직 미구현.
-
-## 남은 단계
-- 7단계: 윈도우 Task Scheduler 등록 (스모크 테스트 통과 후)
+- ROADMAP 참조. 진행 중 조정은 분류 정확도(참고자료·프로젝트 오분류)와 RAG 답변 품질 튜닝, `_review` 대기열 운영.
