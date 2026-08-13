@@ -55,8 +55,8 @@ DB_PATH = Path(os.getenv("RAG_DB_PATH", "rag_db"))
 TABLE_NAME = "vault"
 
 VAULT = Path(
-    os.getenv("OBSIDIAN_VAULT_PATH_WIN")
-    or r"C:\Users\OWNER\iCloudDrive\iCloud~md~obsidian\KC_second_brain"
+    os.getenv("OBSIDIAN_VAULT_PATH_WIN" if os.name == "nt" else "OBSIDIAN_VAULT_PATH_MAC")
+    or os.getenv("OBSIDIAN_VAULT_PATH", "vault")
 )
 # 노트가 들어 있는 구조화 폴더만 색인(템플릿·첨부 제외). ingest_vault.py 와 동일.
 INCLUDE_DIRS = ("10_Professional", "20_Personal", "90_System")
@@ -289,6 +289,10 @@ def list_notes() -> list[Path]:
 
 def ingest(reset: bool = False, verbose: bool = True) -> dict:
     """볼트 노트를 증분 색인한다. reset=True 면 인덱스를 비우고 전체 재색인."""
+    # 인덱스를 비우는 것은 되돌릴 수 없으므로 경로 확인이 먼저다.
+    if not VAULT.is_dir():
+        raise RuntimeError(f"볼트 경로가 없습니다: {VAULT}. OBSIDIAN_VAULT_PATH_WIN 을 확인하세요.")
+
     tbl = connect()
     if reset:
         tbl.delete("true")  # 전체 삭제
@@ -300,6 +304,14 @@ def ingest(reset: bool = False, verbose: bool = True) -> dict:
                             arrow.column("note_sha").to_pylist()))
 
     notes = list_notes()
+    # 볼트 경로가 틀리면 rglob 은 예외 없이 빈 목록을 준다. 그대로 진행하면 아래 정리 단계가
+    # 모든 노트를 '볼트에서 사라짐'으로 보고 인덱스를 통째로 지운다. 조용한 전멸을 막는다.
+    if not notes and existing:
+        raise RuntimeError(
+            f"볼트에서 노트를 찾지 못했습니다: {VAULT}\n"
+            f"인덱스에는 {len(existing)}개가 있습니다. 경로 설정(OBSIDIAN_VAULT_PATH_WIN)을 "
+            "확인하세요. 이대로 진행하면 인덱스가 비워집니다."
+        )
     added = skipped = updated = 0
     for i, note in enumerate(notes, 1):
         text = note.read_text(encoding="utf-8")

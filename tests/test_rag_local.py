@@ -118,6 +118,33 @@ def test_ingest_prunes_notes_deleted_from_vault(vault):
     assert "허가서.md" in names  # 남은 노트는 건드리지 않는다
 
 
+def test_ingest_refuses_to_prune_when_vault_path_is_wrong(vault, monkeypatch):
+    """볼트 경로가 틀렸을 때 인덱스를 비우지 말 것.
+
+    rglob 은 없는 폴더에 예외를 내지 않고 빈 목록을 준다. 그대로 두면 '노트가 전부
+    사라졌다'로 읽혀 정리 단계가 인덱스를 통째로 지운다."""
+    rag_local.ingest(reset=True, verbose=False)
+    before = rag_local.connect().count_rows()
+
+    monkeypatch.setattr(rag_local, "VAULT", vault.parent.parent / "없는볼트")
+    with pytest.raises(RuntimeError, match="볼트 경로가 없습니다"):
+        rag_local.ingest(reset=False, verbose=False)
+
+    assert rag_local.connect().count_rows() == before
+
+
+def test_ingest_refuses_when_vault_exists_but_is_empty(vault, monkeypatch):
+    """경로는 있는데 하위 폴더 이름이 바뀐 경우도 같은 전멸로 이어진다."""
+    rag_local.ingest(reset=True, verbose=False)
+    before = rag_local.connect().count_rows()
+
+    monkeypatch.setattr(rag_local, "INCLUDE_DIRS", ("이름이바뀐폴더",))
+    with pytest.raises(RuntimeError, match="노트를 찾지 못했습니다"):
+        rag_local.ingest(reset=False, verbose=False)
+
+    assert rag_local.connect().count_rows() == before
+
+
 def test_embed_rejects_count_mismatch(monkeypatch):
     """벡터가 입력보다 적으면 청크와 어긋나 검색이 조용히 망가진다 — 크게 실패해야 한다."""
     monkeypatch.setattr(rag_local, "EMBED_PROVIDER", "gemini")

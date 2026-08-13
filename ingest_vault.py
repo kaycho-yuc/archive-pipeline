@@ -27,7 +27,11 @@ BASE = os.getenv("OPENWEBUI_URL", "http://127.0.0.1:3000")
 API_KEY = os.getenv("OPENWEBUI_API_KEY", "")
 KB_NAME = "KC_second_brain"
 KB_DESC = "Obsidian 볼트 자동 동기화 지식베이스 (아카이브 파이프라인)"
-VAULT = Path(r"C:\Users\OWNER\iCloudDrive\iCloud~md~obsidian\KC_second_brain")
+# 아래 openwebui 분기에서만 쓴다(기본 local 백엔드는 rag_local.VAULT 를 따른다).
+VAULT = Path(
+    os.getenv("OBSIDIAN_VAULT_PATH_WIN" if os.name == "nt" else "OBSIDIAN_VAULT_PATH_MAC")
+    or os.getenv("OBSIDIAN_VAULT_PATH", "vault")
+)
 
 # 노트가 들어 있는 구조화 폴더만 올린다(템플릿·첨부 등은 제외).
 INCLUDE_DIRS = ("10_Professional", "20_Personal", "90_System")

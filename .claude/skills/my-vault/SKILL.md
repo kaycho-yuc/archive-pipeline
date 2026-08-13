@@ -10,7 +10,7 @@ RAG + Telegram bot. The owner is a **non-programmer** and returns infrequently, 
 
 - **Always start by presenting the menu below** (and a quick health summary), then do what they pick.
 - Explain in plain language. Confirm before anything destructive (deletes, KB resets, model removal).
-- Project root: `C:\Users\OWNER\Documents\archive-pipeline`. Config/secrets in `.env`.
+- Project root: `C:\Users\Indion\repos\archive-pipeline` (n100-win). Config/secrets in `.env`.
 - Background context lives in `OVERVIEW.md`, `ROADMAP.md`, `SYSTEM-HANDOFF.md`, and the
   assistant memory at `~/.claude/projects/.../memory/` — consult them for the "why".
 
